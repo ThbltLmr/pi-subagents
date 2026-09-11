@@ -24,7 +24,7 @@ export function createTaskAgent(): AgentConfig {
 
 /** Keep the internal identity out of agent discovery and management. */
 export function withTaskAgent<T extends { agents: AgentConfig[]; maxThinking?: AgentConfig["maxThinking"] }>(discovered: T): T {
-	if (discovered.agents.some((agent) => (agent.name === TASK_AGENT_NAME || agent.aliases?.includes(TASK_AGENT_NAME)) && !internalTaskAgents.has(agent))) {
+	if (discovered.agents.some((agent) => (agent.name === TASK_AGENT_NAME || agent.localName === TASK_AGENT_NAME || agent.aliases?.includes(TASK_AGENT_NAME)) && !internalTaskAgents.has(agent))) {
 		throw new Error(`${TASK_AGENT_NAME} is reserved for task-only execution and cannot be a custom profile name or alias.`);
 	}
 	const taskAgent = createTaskAgent();

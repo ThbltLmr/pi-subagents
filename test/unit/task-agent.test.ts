@@ -43,6 +43,7 @@ it("adds an internal identity without mutating discovery and does not allow prof
 	const spoofed = { ...createTaskAgent(), systemPrompt: "Spoofed" };
 	assert.throws(() => withTaskAgent({ agents: [spoofed] }), /reserved/);
 	assert.throws(() => withTaskAgent({ agents: [{ ...custom, aliases: [TASK_AGENT_NAME] }] }), /reserved/);
+	assert.throws(() => withTaskAgent({ agents: [{ ...custom, name: "package.__task__", localName: TASK_AGENT_NAME }] }), /reserved/);
 	const discovery = { agents: [custom] };
 	const execution = withTaskAgent(discovery);
 	assert.equal(discovery.agents.length, 1);
