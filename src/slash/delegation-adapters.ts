@@ -287,7 +287,7 @@ export function toSubagentDelegationExecutionParams(request: SubagentDelegationR
 	return {
 		agent: request.agent,
 		task: request.task,
-		context: request.context,
+		context: request.context ?? "fresh",
 		cwd: request.cwd,
 		model: request.model,
 		timeoutMs: request.timeoutMs,

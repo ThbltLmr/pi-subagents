@@ -10,7 +10,7 @@ A native child no longer needs a named profile:
 subagent({ task: "Implement pagination and run the tests", model: "provider/model" });
 ```
 
-The same shape works in `runs.run(key, { task })`, `runs.all([{ key, task }])`, and workflow lanes. Omitted context means `fresh` for task-only calls, even if a global preference says `fork`. Explicit `context: "fork"` still requires a usable parent session. Named custom profiles remain optional and retain their configured defaults.
+The same shape works in `runs.run(key, { task })`, `runs.all([{ key, task }])`, and workflow lanes. The extension delegation and preflight APIs also accept an omitted `agent`. Omitted context means `fresh` for task-only calls, even if a global preference says `fork`. Explicit `context: "fork"` still requires a usable parent session. Named custom profiles remain optional and retain their configured defaults.
 
 Task-only children keep Pi's base system prompt, applicable global and project context files, and normal skill discovery. They have no role prompt, default reads, progress-file requirement, or automatic acceptance contract. Explicit acceptance and gates still work. Tool permissions and execution limits still apply.
 

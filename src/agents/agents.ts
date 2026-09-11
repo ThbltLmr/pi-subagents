@@ -338,7 +338,7 @@ export function formatUnknownAgentError(name: string, context: UnknownAgentDiagn
 					: directory.state;
 		return `- ${directory.source}: ${directory.path} (${state})`;
 	});
-	const agents = [...context.agents]
+	const agents = context.agents.filter((agent) => agent.name !== "__task__")
 		.sort((left, right) => left.name.localeCompare(right.name) || left.source.localeCompare(right.source))
 		.map((agent) => `- ${agent.name} (${agent.source})`);
 	return [

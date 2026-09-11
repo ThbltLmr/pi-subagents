@@ -1,3 +1,4 @@
+import { TASK_AGENT_NAME, withTaskAgent } from "../agents/task-agent.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -56,7 +57,7 @@ export interface SubagentLaunchContractDiagnostic {
 }
 
 export interface SubagentLaunchContractInput {
-	agent: string;
+	agent?: string;
 	cwd: string;
 	task?: string;
 	agentScope?: AgentScope;
@@ -219,7 +220,7 @@ function normalizeAvailableModels(models: SubagentLaunchContractInput["available
 
 function resolveLaunchContractContext(input: SubagentLaunchContractInput, agent: AgentConfig): "fresh" | "fork" {
 	return resolveSubagentLaunchContext({
-		explicitContext: input.context,
+		explicitContext: input.context ?? (agent.name === TASK_AGENT_NAME ? "fresh" : undefined),
 		agentDefaultContext: agent.defaultContext,
 		defaultSubagentContext: loadConfig().defaultSubagentContext,
 		canUseImplicitFork: canPreferForkFromSnapshot({
@@ -265,6 +266,12 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const diagnostics: SubagentLaunchContractDiagnostic[] = [];
 	const authorityDiagnostic = taskWorkspaceScopeAuthorityDiagnostic(input.task);
 	if (authorityDiagnostic) diagnostics.push(authorityDiagnostic);
+	if (input.agent !== undefined && (typeof input.agent !== "string" || !input.agent.trim() || input.agent.trim() === TASK_AGENT_NAME)) {
+		return { ok: false, code: "missing_agent", message: "agent must name a custom profile; the internal task identity is reserved.", diagnostics };
+	}
+	if (input.agent === undefined && (typeof input.task !== "string" || !input.task.trim())) {
+		return { ok: false, code: "missing_agent", message: "Task-only spawning requires a non-empty task.", diagnostics };
+	}
 	const effectiveCwd = path.resolve(input.cwd);
 	try {
 		if (!fs.statSync(effectiveCwd).isDirectory()) {
@@ -292,12 +299,13 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const scope = resolveExecutionAgentScope(input.agentScope);
 	const parentProvider = input.preferredProvider ?? input.parentModel?.provider;
 	const discovery = discoverAgentSnapshot(effectiveCwd, scope, parentProvider, { includeChains: false });
-	const discovered = discovery.effective;
-	const resolvedAgent = resolveAgentName(input.agent, discovered.agents);
+	const discovered = withTaskAgent(discovery.effective);
+	const requestedAgent = input.agent ?? TASK_AGENT_NAME;
+	const resolvedAgent = resolveAgentName(requestedAgent, discovered.agents);
 	const ambiguousCandidates = resolvedAgent.error
-		? discovered.agents.filter((agent) => resolveAgentName(input.agent, [agent]).agent)
+		? discovered.agents.filter((agent) => resolveAgentName(requestedAgent, [agent]).agent)
 		: resolvedAgent.agent;
-	const invalidAgent = findBlockingAgentDiagnostic(input.agent, ambiguousCandidates, discovered.agentDiagnostics);
+	const invalidAgent = findBlockingAgentDiagnostic(requestedAgent, ambiguousCandidates, discovered.agentDiagnostics);
 	if (invalidAgent) {
 		const message = `Agent '${input.agent}' has invalid configuration: ${invalidAgent.error}`;
 		return { ok: false, code: "missing_agent", message, diagnostics: [{ code: "missing_agent", severity: "error", message }] };
@@ -306,7 +314,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		return { ok: false, code: "ambiguous_agent", message: resolvedAgent.error, diagnostics };
 	}
 	if (!resolvedAgent.agent) {
-		return { ok: false, code: "missing_agent", message: formatUnknownAgentError(input.agent, unknownAgentDiagnosticContext(discovered)), diagnostics };
+		return { ok: false, code: "missing_agent", message: formatUnknownAgentError(requestedAgent, unknownAgentDiagnosticContext(discovered)), diagnostics };
 	}
 	const definitionAgent = resolvedAgent.agent;
 	let extensionBindings: ExtensionBindings | undefined;
@@ -459,7 +467,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		...(input.outputSchema ? { structuredOutputSchema: input.outputSchema } : {}),
 		...(extensionBindings ? { extensionBindings } : {}),
 	});
-	const candidates = candidateList(input.agent, agent, discovery.all);
+	const candidates = candidateList(requestedAgent, agent, discovery.all);
 	const shadowedCandidates = candidates.filter((candidate) => !candidate.selected);
 	const contractBase: Omit<SubagentLaunchContract, "digest"> = {
 		version: SUBAGENT_LAUNCH_CONTRACT_VERSION,

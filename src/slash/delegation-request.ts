@@ -1,6 +1,7 @@
 import {
 	type SubagentDelegationRequest,
 } from "../api/delegation.ts";
+import { TASK_AGENT_NAME } from "../agents/task-agent.ts";
 import { validateIntercomBridgeConfig } from "../intercom/intercom-bridge.ts";
 import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
 import type { IntercomBridgeConfig } from "../shared/types.ts";
@@ -65,9 +66,9 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 	const identity = { requestId, ownerRunId, nodeId };
 	const unsupportedField = Object.keys(value).find((key) => !supportedFields.has(key));
 	if (unsupportedField) return { ok: false, ...identity, error: `Unsupported delegation field: ${unsupportedField}.` };
-	if (!nonEmptyString(value.agent)) return { ok: false, ...identity, error: "Delegation agent must be a non-empty string." };
+	if (value.agent !== undefined && (!nonEmptyString(value.agent) || (value.agent as string).trim() === TASK_AGENT_NAME)) return { ok: false, ...identity, error: "Delegation agent must be a non-empty custom profile name; the internal task identity is reserved." };
 	if (!nonEmptyString(value.task)) return { ok: false, ...identity, error: "Delegation task must be a non-empty string." };
-	if (value.context !== "fresh" && value.context !== "fork") {
+	if (value.context !== undefined && value.context !== "fresh" && value.context !== "fork") {
 		return { ok: false, ...identity, error: "Delegation context must be fresh or fork." };
 	}
 	if (!nonEmptyString(value.cwd)) return { ok: false, ...identity, error: "Delegation cwd must be a non-empty string." };
@@ -115,7 +116,7 @@ export function parseSubagentDelegationRequest(data: unknown): SubagentDelegatio
 	if (Buffer.byteLength(value.cwd as string, "utf8") > MAX_CWD_BYTES) {
 		return { ok: false, ...identity, error: "Delegation cwd exceeds 32 KiB when UTF-8 encoded." };
 	}
-	if (Buffer.byteLength(value.agent as string, "utf8") > MAX_SHORT_TEXT_BYTES) {
+	if (typeof value.agent === "string" && Buffer.byteLength(value.agent, "utf8") > MAX_SHORT_TEXT_BYTES) {
 		return { ok: false, ...identity, error: "Delegation agent exceeds 1 KiB when UTF-8 encoded." };
 	}
 	if (typeof value.model === "string" && Buffer.byteLength(value.model, "utf8") > MAX_SHORT_TEXT_BYTES) {

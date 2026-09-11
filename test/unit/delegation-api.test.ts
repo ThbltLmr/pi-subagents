@@ -64,6 +64,18 @@ const request: SubagentDelegationRequest = {
 };
 
 describe("public subagent delegation contract", () => {
+	it("accepts task-only requests with fresh context and rejects the internal identity", () => {
+		const { agent: _agent, context: _context, ...taskRequest } = request;
+		const parsed = parseSubagentDelegationRequest(taskRequest);
+		assert.equal(parsed.ok, true);
+		if (!parsed.ok) return;
+		const params = toSubagentDelegationExecutionParams(parsed.request);
+		assert.equal(params.agent, undefined);
+		assert.equal(params.context, "fresh");
+		assert.equal(toSubagentDelegationExecutionParams({ ...taskRequest, context: "fork" }).context, "fork");
+		assert.equal(parseSubagentDelegationRequest({ ...taskRequest, task: " " }).ok, false);
+		assert.equal(parseSubagentDelegationRequest({ ...taskRequest, agent: " __task__ " }).ok, false);
+	});
 	it("uses the existing prompt-template event family as the only transport", () => {
 		assert.equal(SUBAGENT_DELEGATION_REQUEST_EVENT, "prompt-template:subagent:request");
 		assert.equal(SUBAGENT_DELEGATION_STARTED_EVENT, "prompt-template:subagent:started");

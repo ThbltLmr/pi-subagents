@@ -76,6 +76,23 @@ describe("public launch contract preflight", () => {
 		fs.rmSync(tempDir, { recursive: true, force: true });
 	});
 
+	it("preflights plain children and enforces task-only capability ceilings", async () => {
+		const plain = await resolveSubagentLaunchContract({ cwd: tempDir, task: "Inspect the code" });
+		assert.equal(plain.ok, true);
+		if (!plain.ok) return;
+		assert.equal(plain.contract.context, "fresh");
+		const fork = await resolveSubagentLaunchContract({ cwd: tempDir, task: "Inspect", context: "fork" });
+		assert.equal(fork.ok, true);
+		if (fork.ok) assert.equal(fork.contract.context, "fork");
+		for (const agent of ["__task__", " __task__ "]) {
+			assert.equal((await resolveSubagentLaunchContract({ cwd: tempDir, agent, task: "Inspect" })).ok, false);
+		}
+		assert.equal((await resolveSubagentLaunchContract({ cwd: tempDir, task: " " })).ok, false);
+		const restricted = await resolveSubagentLaunchContract({ cwd: tempDir, task: "Inspect", capabilityCeiling: { version: 1, allowedAgents: ["__task__"], sources: ["test"] } });
+		assert.equal(restricted.ok, false);
+		assert.equal(restricted.code, "restricted_agent");
+	});
+
 	it("resolves an ordinary single-agent contract without creating launch directories", async () => {
 		writeUserAgentFixtures();
 		const cwd = path.join(tempDir, "repo");
