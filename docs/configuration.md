@@ -74,13 +74,9 @@ Controls the duration, in milliseconds, for model exclusions. The default is `86
 
 ## `toolDescriptionMode`
 
-```json
-{ "toolDescriptionMode": "compact" }
-```
+This personal fork ignores `toolDescriptionMode` and does not read `subagent-tool-description.md`. The registered description is always `Run configured subagents.`, with no `promptSnippet`, `promptGuidelines`, or appended policy. The parameter schema is unchanged. Remove the old mode setting and custom file if no other installation needs them.
 
-Controls the parent-facing `subagent` tool description registered at startup. The default registers the compact execution/safety description plus separate `promptSnippet` and `promptGuidelines`. Explicit `"compact"` uses the same description without that extra metadata; `"full"` adds workflow and management detail, also without split metadata. All modes retain the same flat parameter schema. Extended examples and recipes are available on demand through `action:"guide"` and the bundled pi-subagents skill; full mode is not an exhaustive manual. Count the separate default metadata as well as the tool definition when comparing prompt footprints.
-
-`custom` reads `subagent-tool-description.md` from the project config directory, then from `~/.pi/agent/subagent-tool-description.md`. Missing, empty, unreadable, or oversized custom files fall back to the full description. Custom templates may use `{{fullDescription}}`, `{{compactDescription}}`, `{{safetyGuidance}}`, `{{agentDir}}`, and `{{projectConfigDir}}`; the safety guidance is always present so custom prose cannot remove the runtime guardrails. Restart Pi after changing the mode or custom file.
+See [the fork notes](../FORK.md) for the scope of this change. Guides and bundled skills remain available on demand.
 
 ## `inlineToolDisplay`
 

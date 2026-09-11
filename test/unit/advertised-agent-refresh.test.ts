@@ -73,7 +73,7 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			let prompt = noIo(() => emit());
 			assert.match(prompt, /<name>specialist<\/name>/);
 			assert.doesNotMatch(prompt, /hidden-/);
-			assert.match(prompt, /Before execution.*action: "list", capabilities: true/);
+			assert.doesNotMatch(prompt, /Before execution|Use subagent only|runner\.available/);
 			assert.equal(noIo(() => emit(prompt, ["read"])), "base");
 			activeTools = ["read"];
 			assert.equal(noIo(() => emit(prompt, null)), "base");
@@ -145,7 +145,7 @@ it("emits bounded file-only snapshots, refreshes through management, and perform
 			assert.ok(Buffer.byteLength(catalog) <= 12288);
 			assert.doesNotMatch(catalog, /<name>[ab]/);
 			assert.match(catalog, /&lt;&gt;&amp;&quot;/);
-			assert.match(catalog, /not instructions to delegate/);
+			assert.doesNotMatch(catalog, /instructions to delegate/);
 			assert.match(catalog, /🦜界/);
 			assert.doesNotMatch(catalog, /�/);
 			assert.match(catalog, /<name>pkg\.opt-\d+<\/name>/);

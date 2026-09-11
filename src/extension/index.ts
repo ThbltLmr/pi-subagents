@@ -72,7 +72,7 @@ import { disposeChildSessions } from "../runs/shared/child-session.ts";
 import { resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import { applyModelExclusionsConfig, loadConfig, resolveAsyncByDefault, resolveScheduledStoreRoot } from "./config.ts";
-import { buildSubagentToolDescription, buildSubagentToolPromptMetadata } from "./tool-description.ts";
+import { SUBAGENT_TOOL_DESCRIPTION } from "./tool-description.ts";
 import { formatWorkflowPreflightSummary, normalizeWorkflowPreflight } from "../workflows/workflow-preflight.ts";
 import { finalizeToolResult } from "./tool-result.ts";
 import { collectGoalContinuationNotices } from "../missions/goal-driver.ts";
@@ -761,8 +761,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	const tool: ToolDefinition<typeof parameters, Details> = {
 		name: "subagent",
 		label: "Subagent",
-		description: buildSubagentToolDescription(config),
-		...buildSubagentToolPromptMetadata(config),
+		description: SUBAGENT_TOOL_DESCRIPTION,
 		parameters,
 
 		async execute(id, params, signal, onUpdate, ctx) {

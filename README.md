@@ -4,6 +4,8 @@
 
 # pi-subagents
 
+Personal fork of `nicobailon/pi-subagents`, based on v0.67.0. The `personal` branch removes delegation policy from the parent `subagent` tool description and advertised-agent catalog. See [FORK.md](FORK.md) for installation, scope, and upstream updates. The documentation below otherwise describes upstream behavior.
+
 `pi-subagents` lets Pi delegate work to focused child agents. Use it for code review, scouting, implementation, parallel audits, saved workflows, background jobs, and anything else that benefits from a second or third set of model eyes.
 
 <https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1>
@@ -11,7 +13,7 @@
 ## Install
 
 ```bash
-pi install npm:pi-subagents
+pi install git:github.com/ThbltLmr/pi-subagents@personal
 ```
 
 That is the only required step. Background children use the host's SDK: npm Pi keeps its detached Node runner; the official Pi 0.85.1 Linux x64 standalone release loads the same runner through Pi's embedded SDK, without a separate SDK install. See [Standalone background execution](docs/standalone-background.md) for the supported boundary and validation gate.

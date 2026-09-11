@@ -2576,7 +2576,7 @@ export interface ExtensionConfig {
 	modelExclusions?: ModelExclusionsConfig;
 	/** Exact provider/model candidates mapped to operator-declared equivalent response IDs. Empty arrays add no accepted IDs. */
 	modelResponseAliases?: Record<string, string[]>;
-	/** Tool description variant registered for the parent-facing subagent tool. Defaults to split metadata. */
+	/** @deprecated Ignored by the personal fork; the parent tool description is always neutral. */
 	toolDescriptionMode?: ToolDescriptionMode;
 	/** Inline chat rendering for the subagent tool. Defaults to rich. */
 	inlineToolDisplay?: InlineToolDisplay;
