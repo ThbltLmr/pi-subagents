@@ -3,6 +3,8 @@ description: Run a bounded supervisor-mediated council of advisors and write a d
 argument-hint: "<question> [--advisors name,name] [--max-passes 2|3] [--scope ...] [--non-goals ...]"
 ---
 
+Launch plain task-only children by omitting `agent`, unless an explicit custom profile was requested. Terms such as reviewer, worker, scout, and researcher below describe tasks, not installed profiles.
+
 Run a bounded, supervisor-mediated council on this question. You, the parent
 session, are the supervisor. You select the roster, curate cross-advisor packets,
 decide which feedback is valid, and write the final memo. Advisors do not talk
@@ -21,15 +23,12 @@ of convening a council.
 
 - If `--advisors` is given, use exactly those agent names. Fail clearly on an
   unknown agent. Do not require or invent per-advisor role labels.
-- Otherwise list agents with `subagent({ action: "list" })`, then prefer 2–3
-  executable names that start with `council-`.
-- If fewer than two profiles are available, fill the roster with `oracle`, then
-  `reviewer`, until it has two advisors. Launch fallback `oracle` with
-  `context: "fork"` so global defaults cannot remove its parent-chat context.
-  Let `reviewer` use its normal profile context. Note the fallback and known
-  context modes in the memo.
-- Use the normal single-oracle loop only when a requested roster or unavailable
-  builtins leaves fewer than two advisors. Label the memo as degraded mode.
+- Otherwise use 2–3 plain task-only children. Select models under user/project
+  policy and identify advisors by stable workflow keys.
+- Plain children use fresh context. Do not select an `oracle` or `reviewer`
+  fallback; this fork ships no profiles.
+- If a requested custom roster cannot run, report the unavailable profiles
+  instead of silently substituting them.
 
 Profiles provide the model, tools, context, and advisor stance. The council
 question and scope provide the decision frame. If the user wants a specific lens,

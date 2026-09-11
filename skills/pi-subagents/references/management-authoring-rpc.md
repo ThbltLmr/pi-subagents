@@ -1,5 +1,7 @@
 # Pi Subagents: Management Authoring Rpc
 
+This reference retains upstream recipes. This fork has no bundled profiles: use plain `{ task }` children by default. Named profiles below require explicit custom configuration, and task-only children default to fresh context.
+
 This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 
 ## Management Mode

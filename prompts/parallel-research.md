@@ -2,6 +2,8 @@
 description: Parallel subagents research
 ---
 
+Launch plain task-only children by omitting `agent`, unless an explicit custom profile was requested. Terms such as reviewer, worker, scout, and researcher below describe tasks, not installed profiles.
+
 Launch parallel research subagents to build a grounded answer to the current question or decision.
 
 Use fresh context, not forked context, unless I explicitly ask for forked context. Researchers and scouts should inspect sources directly instead of relying on the main conversation history.

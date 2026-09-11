@@ -1,5 +1,7 @@
 # Models
 
+> Personal fork: no profiles are bundled. Use `{ task: "..." }` for a plain fresh-context child. Any named-profile example below requires an explicitly installed custom profile; upstream builtin descriptions are historical. See [FORK.md](../FORK.md).
+
 How subagents pick models, and how to change that.
 
 Builtin agents inherit your current Pi default model. This keeps new installs from depending on a provider you may not have configured. From there you can layer defaults and overrides:

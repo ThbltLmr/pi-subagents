@@ -2,6 +2,8 @@
 description: Parallel cleanup review
 ---
 
+Launch plain task-only children by omitting `agent`, unless an explicit custom profile was requested. Terms such as reviewer, worker, scout, and researcher below describe tasks, not installed profiles.
+
 Run a fresh-context parallel cleanup review of the current work.
 
 Use the `subagent` tool. First inspect available agents/skills if needed, then launch two reviewer subagents in parallel with `context: "fresh"`. Do not use forked context unless I explicitly ask for it. Reviewers must inspect the repository, relevant instructions, and current diff directly from files and commands. They must not rely on the main conversation history.

@@ -198,7 +198,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(description, /fork/);
 		assert.match(description, /profile/);
 		assert.match(description, /declared defaultContext/);
-		assert.match(description, /defaultSubagentContext wins over each agent defaultContext/);
+		assert.match(description, /Task-only calls default to fresh/);
+		assert.match(description, /Named profiles: defaultSubagentContext wins over agent defaultContext/);
 		assert.match(description, /overrides every child/);
 		assert.match(description, /implicit fork/);
 		assert.match(description, /else fresh/);

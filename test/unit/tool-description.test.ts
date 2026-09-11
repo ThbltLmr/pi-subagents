@@ -12,7 +12,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "
 
 describe("registered subagent tool description", () => {
 	it("is a neutral one-line description", () => {
-		assert.equal(SUBAGENT_TOOL_DESCRIPTION, "Run configured subagents.");
+		assert.equal(SUBAGENT_TOOL_DESCRIPTION, "Run subagents.");
 	});
 
 	for (const mode of [undefined, "full", "compact", "custom", "invalid"]) {
@@ -46,7 +46,7 @@ describe("registered subagent tool description", () => {
 					"--experimental-strip-types", "--import", "./test/support/register-loader.mjs",
 					"--input-type=module", "--eval", script,
 				], { cwd: projectRoot, env, encoding: "utf8", timeout: 60_000 }));
-				assert.equal(tool.description, "Run configured subagents.");
+				assert.equal(tool.description, "Run subagents.");
 				assert.equal(tool.hasSnippet, false);
 				assert.equal(tool.hasGuidelines, false);
 				for (const name of ["agent", "task", "action", "workflowScript", "async", "worktree"]) {

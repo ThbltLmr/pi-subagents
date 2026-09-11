@@ -2,6 +2,8 @@
 description: Use subagents to gather context, then ask clarifying questions
 ---
 
+Launch plain task-only children by omitting `agent`, unless an explicit custom profile was requested. Terms such as reviewer, worker, scout, and researcher below describe tasks, not installed profiles.
+
 Based on our discussion and my intent, launch focused context-gathering subagents before planning or implementing.
 
 Use `scout` to inspect the relevant local files, existing patterns, constraints, tests, and likely integration points. Use `researcher` when external docs, recent sources, ecosystem context, or primary evidence would improve the answer.

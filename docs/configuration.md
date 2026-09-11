@@ -74,7 +74,7 @@ Controls the duration, in milliseconds, for model exclusions. The default is `86
 
 ## `toolDescriptionMode`
 
-This personal fork ignores `toolDescriptionMode` and does not read `subagent-tool-description.md`. The registered description is always `Run configured subagents.`, with no `promptSnippet`, `promptGuidelines`, or appended policy. The parameter schema is unchanged. Remove the old mode setting and custom file if no other installation needs them.
+This personal fork ignores `toolDescriptionMode` and does not read `subagent-tool-description.md`. The registered description is always `Run subagents.`, with no `promptSnippet`, `promptGuidelines`, or appended policy. The parameter schema describes task-only spawning and optional custom profiles. Remove the old mode setting and custom file if no other installation needs them.
 
 See [the fork notes](../FORK.md) for the scope of this change. Guides and bundled skills remain available on demand.
 
@@ -157,7 +157,7 @@ WorkflowScript calls use background execution when the request omits `async`. Se
 { "defaultSubagentContext": "fresh" }
 ```
 
-Sets `fresh` or `fork` for every subagent launch that omits `context`. This global preference replaces each agent-level `defaultContext`. Explicit `context: "fresh"` or `context: "fork"` still wins.
+Sets `fresh` or `fork` for named custom-profile launches that omit `context`. This preference replaces the profile's `defaultContext`. Plain task-only launches always default to fresh, regardless of this setting. Explicit `context: "fresh"` or `context: "fork"` still wins.
 
 With `"fork"`, the setting uses the existing implicit-fork behavior. A launch starts fresh when the parent session file or current leaf is not available. `"fresh"` starts fresh even when the selected agent defaults to fork. Scheduled runs continue to set fresh context explicitly. A runner or provider that does not support fork context keeps its existing rejection behavior.
 

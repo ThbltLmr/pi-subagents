@@ -11,14 +11,12 @@ The parent selects the roster, relays only curated claims, decides validity, and
 
 Before launch, read:
 
-- `skills/pi-subagents/references/execution-controls.md`
-- `skills/council-mode/references/pass-contracts.md`
+- `../pi-subagents/references/execution-controls.md`
+- `references/pass-contracts.md`
 
 ## Roster
 
-Run `subagent({ action: "list" })`, then choose 2-3 executable advisor names that start with `council-`. The prefix is convention only. Never use more than four advisors.
-
-If fewer than two council profiles are available, fill with `oracle`, then `reviewer`. Launch fallback `oracle` with `context: "fork"`; let fallback `reviewer` use its normal profile context. Note fallbacks and known context modes in the memo. If fewer than two advisors remain, use the normal one-oracle consultation loop and label it degraded mode.
+Choose 2–3 plain task-only children, with models selected under user/project policy. Fresh context is the default. Use an explicit custom profile only when requested or configured for this council; list profiles to check availability. Never use more than four advisors. There are no fallback `oracle` or `reviewer` profiles.
 
 `council-*` profiles live in user or project agent directories, not this package. A profile defines model, tools, context, output defaults, and persistent stance. Keep advisors read-only, disable inherited skills unless needed, and put stance in the profile body instead of inventing per-run role labels.
 
@@ -32,7 +30,7 @@ Pass 1 is independent reports. Pass 2 is one cross-exam. Run Pass 3 only when `-
 
 1. Write the council brief: question, scope, non-goals, evidence targets, roster, known advisor context modes, and pass cap.
 2. Tell the user the roster, context modes, and pass cap.
-3. Launch one async `workflowScript` with `runs.all` for Pass 1. Use stable keys, `phase: "Council pass 1"`, concise labels, and `output: false` unless separate artifacts are useful. Set `context` only when the profile context is known or a fallback rule requires it.
+3. Launch one async `workflowScript` with `runs.all` for Pass 1. Use stable keys, `phase: "Council pass 1"`, concise labels, and `output: false` unless separate artifacts are useful. Use fresh context unless the user requests forked context or an explicitly selected custom profile requires it.
 4. Return one aggregate Pass 1 receipt. On completion, tell the user completion count, agreement count, dispute count, and whether Pass 2 is needed.
 5. Synthesize the claim matrix in the parent: agreements, disputed claims, missing proof, owner decisions, and at most five material relay claims per advisor.
 6. For Pass 2, tell the user which claims are relayed and why they matter. Resume each advisor with a curated challenge packet. A resume needs a retained run id and task; it excludes `agent` and rejects `gate`. Record each new run id; Pass 3 resumes those latest ids with new stable keys.
@@ -56,4 +54,4 @@ The memo states:
 - confidence and what would change the decision
 - roster, passes, fallbacks, and known advisor context modes
 
-Identify advisors by profile name. State when fallback `oracle` was forked and context-aware. Escalate to a writer only after the memo and only when the user requests it.
+Identify advisors by their stable run key, model, and any explicitly selected profile. Record their context modes. Escalate to a writer only after the memo and only when the user requests it.

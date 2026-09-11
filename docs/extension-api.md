@@ -1,5 +1,7 @@
 # Extension and integration APIs
 
+> Personal fork: no profiles are bundled. Use `{ task: "..." }` for a plain fresh-context child. Any named-profile example below requires an explicitly installed custom profile; upstream builtin descriptions are historical. See [FORK.md](../FORK.md).
+
 Public seams for other Pi extensions and host integrations: the in-process RPC, the structured delegation API, launch preflight, capability ceilings, the background-work provider contract, and the Herdr integration.
 
 ## Trusted workflow resources
@@ -59,7 +61,7 @@ export default function (pi: ExtensionAPI) {
             hostCommands: [{ key: "check", command }],
             script: `
               const review = await runs.run("review", {
-                agent: "reviewer", task: ${JSON.stringify(args.task)}
+                task: ${JSON.stringify(args.task)}
               });
               if (!review.ok) throw new Error("Review child failed");
               const check = await runs.host("check", ${JSON.stringify(host)});
@@ -108,7 +110,7 @@ pi.events.emit("subagents:rpc:v1:request", {
   requestId,
   method: "spawn",
   params: {
-    workflowScript: `return runs.run("main", { agent: "reviewer", task: "Review the current diff" })`,
+    workflowScript: `return runs.run("main", { task: "Review the current diff" })`,
     context: "fresh"
   }
 });
@@ -275,7 +277,7 @@ Boundaries:
 - Raw prompts are not exposed in public contract output.
 - It is side-effect-free for launch state: it does not create child sessions, temp prompt files, structured-output runtimes, tool-diagnostic files, or run artifacts.
 - Some host-owned facts, such as exact fork snapshots, nested async roots, and live model registries, can only be proven by the Pi host; those appear as `host_required` diagnostics instead of silently pretending to be exact.
-- Preflight reads the extension config, so `defaultSubagentContext: "fresh"` or `"fork"` affects omitted context in the same way as execution. Explicit `context` still wins.
+- Delegation and preflight accept an omitted `agent` for a plain child with a non-empty `task`. Plain children default to fresh context, regardless of `defaultSubagentContext`. Explicit `context` still wins. Preflight honors configured context defaults for named custom profiles; delegation requests without `context` use fresh.
 
 ## Structured delegation API
 

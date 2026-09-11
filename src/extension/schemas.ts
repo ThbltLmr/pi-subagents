@@ -346,7 +346,7 @@ const SubagentParamProperties = {
 	lane: Type.Optional(WorkflowLaneMetadata),
 	context: Type.Optional(Type.String({
 		enum: ["fresh", "fork", "profile"],
-		description: "fresh/fork overrides every child; profile requires agent's declared defaultContext, ignoring config. Omitted: defaultSubagentContext wins over each agent defaultContext; implicit fork needs persisted parent + leaf, else fresh. forkContext may prune forks before spawn.",
+		description: "Task-only calls default to fresh. fresh/fork overrides every child; profile requires a custom agent's declared defaultContext, ignoring config. Named profiles: defaultSubagentContext wins over agent defaultContext; implicit fork needs persisted parent + leaf, else fresh. forkContext may prune forks before spawn.",
 	})),
 	async: Type.Optional(Type.Boolean({ description: "Background; default asyncByDefault. false only to block parent." })),
 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout. Foreground and single async runs use config timeoutMs, else 30m; async composites have no default parent deadline. Alias maxRuntimeMs." })),

@@ -1,5 +1,7 @@
 # Pi Subagents: Execution Controls
 
+This reference retains upstream recipes. This fork has no bundled profiles: use plain `{ task }` children by default. Named profiles below require explicit custom configuration, and task-only children default to fresh context.
+
 This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 
 ## Discovery and Scope Rules
@@ -53,7 +55,7 @@ must resume it by key.
 
 ```typescript
 subagent({
-  workflowScript: `return runs.run("oracle-check", { agent: "oracle", task: "Review my current direction and challenge assumptions.", context: "fork" })`
+  workflowScript: `return runs.run("oracle-check", { task: "Review my current direction and challenge assumptions.", context: "fork" })`
 })
 ```
 
@@ -73,7 +75,7 @@ JavaScript control flow or data-dependent branching. Use
 `runs.run(key, { agent, task, ... })` for keyed children, `runs.all([...])` for
 parallel children, and ordinary JavaScript for sequence, filtering, retries,
 and aggregation. Scripts are ordinary JavaScript statement bodies, so use an
-explicit return such as `return runs.run("main", { agent: "worker", task: "..." })` for a useful one-child result. Use top-level `await`,
+explicit return such as `return runs.run("main", { task: "..." })` for a useful one-child result. Use top-level `await`,
 plain helper functions, or explicit Promise chains; nested `async function`
 helpers, async arrows, and async methods are rejected. Prefer a single scripted
 workflow whenever the parent is starting a coordinated wave, such as multiple
@@ -83,10 +85,10 @@ lanes, or a fanout that the parent will consume together.
 ```js
 subagent({
   workflowScript: `
-    const scan = await runs.run("scan", { label: "Map target behavior", agent: "scout", task: "Map the target" });
+    const scan = await runs.run("scan", { label: "Map target behavior", task: "Map the target" });
     const reviews = await runs.all([
-      { key: "correctness", label: "Review target correctness", agent: "reviewer", task: "Review correctness: " + scan.output },
-      { key: "tests", label: "Review target test coverage", agent: "reviewer", task: "Review tests: " + scan.output }
+      { key: "correctness", label: "Review target correctness", task: "Review correctness: " + scan.output },
+      { key: "tests", label: "Review target test coverage", task: "Review tests: " + scan.output }
     ]);
     return reviews.map(result => result.output);
   `
@@ -184,7 +186,7 @@ reconciliation, or timeout failures.
 
 ```typescript
 subagent({
-  workflowScript: `return runs.run("main", { agent: "worker", task: "Run the full test suite" })`,
+  workflowScript: `return runs.run("main", { task: "Run the full test suite" })`,
   async: true
 })
 ```
@@ -197,7 +199,7 @@ For review fanout where the parent continues a local audit:
 
 ```typescript
 const run = subagent({
-  workflowScript: `return runs.run("correctness", { agent: "reviewer", task: "Review the current diff for correctness issues. Do not edit files." })`,
+  workflowScript: `return runs.run("correctness", { task: "Review the current diff for correctness issues. Do not edit files." })`,
   async: true,
   context: "fresh"
 })
@@ -418,8 +420,8 @@ Project panes run a separate Pi session from the target directory. Subagents lau
 
 ```typescript
 subagent({ action: "mission.create", mission: { title: "Ship auth refresh", objective: "Implement and validate refresh handling" } })
-subagent({ workflowScript: `return runs.run("main", { agent: "worker", task: "Implement the approved plan" })`, missionId: "<mission-id>" })
-subagent({ workflowScript: `return runs.run("main", { agent: "scout", task: "Quickly answer whether this file exists" })`, mission: false })
+subagent({ workflowScript: `return runs.run("main", { task: "Implement the approved plan" })`, missionId: "<mission-id>" })
+subagent({ workflowScript: `return runs.run("main", { task: "Quickly answer whether this file exists" })`, mission: false })
 subagent({ action: "mission.list", missionScope: "global" })
 subagent({ action: "mission.resolve-decision", missionId: "<mission-id>", id: "<decision-id>", summary: "Settled: ship the v2 API; no schema freeze needed." })
 subagent({ action: "project.open", cwd: "/path/to/other-repo", message: "Own this mission for the project and report back with receipts." })
@@ -437,8 +439,8 @@ them share one filesystem view.
 subagent({
   workflowScript: `
     const results = await runs.all([
-      { key: "feature-a", agent: "worker", task: "Implement feature A", worktree: true },
-      { key: "feature-b", agent: "worker", task: "Implement feature B", worktree: true }
+      { key: "feature-a", task: "Implement feature A", worktree: true },
+      { key: "feature-b", task: "Implement feature B", worktree: true }
     ]);
     return results.map(({ key, artifactPaths }) => ({ key, artifactPaths }));
   `
@@ -472,7 +474,7 @@ worktree, first confirm dependencies were linked, installed, or provisioned by
 For plan, design, or architecture advice that asks to ask, consult, discuss with, or come to agreement with `oracle`, start with one forked oracle run. Read its result. If it challenges the direction or leaves a material tradeoff, resume that same completed child once with a focused follow-up, then synthesize the parent decision. `resume` returns a new run id, but continues the same oracle session and inherited context. Do not force a second round for an explicit one-shot request, a trivial question, or a fully settled first answer.
 
 ```typescript
-const first = await runs.run("oracle-consult", { agent: "oracle", task: "Review this plan and identify the strongest unresolved tradeoff." });
+const first = await runs.run("oracle-consult", { task: "Review this plan and identify the strongest unresolved tradeoff." });
 const final = await runs.run("oracle-consult-follow-up", { resume: first.runId, task: "Address this focused question, then state the best recommendation: ..." });
 ```
 
@@ -488,12 +490,12 @@ The intended oracle loop is:
 ```typescript
 // Advisory review in a branched thread. Oracle defaults to forked context.
 subagent({
-  workflowScript: `return runs.run("oracle-check", { agent: "oracle", task: "Review my current direction, challenge assumptions, and propose the best next move." })`
+  workflowScript: `return runs.run("oracle-check", { task: "Review my current direction, challenge assumptions, and propose the best next move." })`
 })
 
 // Implementation only after explicit approval. Worker defaults to forked context.
 subagent({
-  workflowScript: `return runs.run("implementation", { agent: "worker", task: "Implement the approved approach: ..." })`
+  workflowScript: `return runs.run("implementation", { task: "Implement the approved approach: ..." })`
 })
 ```
 

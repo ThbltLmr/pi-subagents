@@ -1,5 +1,7 @@
 # Agents
 
+> Personal fork: no profiles are bundled. Use `{ task: "..." }` for a plain fresh-context child. Any named-profile example below requires an explicitly installed custom profile; upstream builtin descriptions are historical. See [FORK.md](../FORK.md).
+
 An agent is a markdown file: YAML frontmatter on top, a system prompt below. The frontmatter defines the specialist that runs as the child session.
 
 ```yaml
@@ -31,7 +33,7 @@ Discovery notes:
 - Installed Pi packages can expose agent directories from either `{"pi-subagents":{"agents":["./agents"]}}` or `{"pi":{"subagents":{"agents":["./agents"]}}}` in their package manifest. Package agents load above builtins and below user/project agents.
 - Use `agentScope: "user" | "project" | "both"` to control discovery. `both` is the default, and project definitions win runtime-name collisions.
 
-## Builtin agents
+## Upstream profiles (not shipped)
 
 Builtins load at the lowest priority, so a user or project agent with the same name overrides them. They do not pin a provider model; they inherit your current Pi default model unless you set `subagents.defaultModel` or `subagents.agentOverrides.<name>.model` (see [models.md](models.md)).
 

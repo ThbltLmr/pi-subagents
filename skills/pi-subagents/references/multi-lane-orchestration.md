@@ -1,5 +1,7 @@
 # Multi-Lane Orchestration
 
+This reference retains upstream recipes. This fork has no bundled profiles: use plain `{ task }` children by default. Named profiles below require explicit custom configuration, and task-only children default to fresh context.
+
 Use this reference when several independent tasks need coordinated workers, worktrees, or repositories. It defines lane ownership; use the other pi-subagents references for run controls, prompts, and mission details. The parent remains the final decision-maker.
 
 Create lanes only when delegation materially improves evidence, independent review, or isolated execution. Do not manufacture parallelism: keep dependent work serial, and only split work when each lane has a distinct decision and useful output.

@@ -1,5 +1,7 @@
 # Pi Subagents: Review And Validation
 
+This reference retains upstream recipes. This fork has no bundled profiles: use plain `{ task }` children by default. Named profiles below require explicit custom configuration, and task-only children default to fresh context.
+
 Generic review and delivery guidance for delegated work. This file does not encode private backlog, merge, or release policy.
 
 ## Delivery loop

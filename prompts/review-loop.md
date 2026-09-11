@@ -2,9 +2,11 @@
 description: Review/fix loop until clean
 ---
 
+Launch plain task-only children by omitting `agent`, unless an explicit custom profile was requested. Terms such as reviewer, worker, scout, and researcher below describe tasks, not installed profiles.
+
 Run a parent-orchestrated review loop for the requested work.
 
-Use the `subagent` tool. Keep the parent session as the loop controller and final decision-maker. Child subagents must receive concrete role-specific tasks; they must not run subagents or manage the loop themselves unless the parent intentionally selected an explicit fanout agent whose builtin `tools` includes `subagent` for that assigned fanout.
+Use the `subagent` tool. Keep the parent session as the loop controller and final decision-maker. Child subagents must receive concrete role-specific tasks; they must not run subagents or manage the loop themselves unless the parent intentionally selected an explicit fanout agent whose configured `tools` includes `subagent` for that assigned fanout.
 
 Default to a maximum of 3 review rounds unless I specify a different cap. Count a review round each time fresh-context reviewers inspect the current diff after a worker pass. Stop early when reviewers find no P0 findings, no P1 fixes worth doing now, and no approved P2 notes that should be handled in this loop.
 
@@ -28,7 +30,7 @@ Do not blindly apply every reviewer suggestion. If reviewers surface an unapprov
 
 When an async implementation worker completes, treat its handoff as the transition into review, not as final completion, unless I explicitly asked for worker-only work, review-only output, or to stop after implementation.
 
-When there are fixes worth doing now and the workflow is implementation-authorized, launch one async forked `worker` without hard tool-call caps to apply only those synthesized fixes. Ask it to preserve the approved scope, run focused validation, and report changed files, commands run with exit codes, validation evidence, surprises, and anything left undone.
+When there are fixes worth doing now and the workflow is implementation-authorized, launch one async fresh-context child with the accepted findings in its task, without hard tool-call caps to apply only those synthesized fixes. Ask it to preserve the approved scope, run focused validation, and report changed files, commands run with exit codes, validation evidence, surprises, and anything left undone.
 
 After a fix worker returns, run another review round only when it made material changes or addressed non-trivial findings. Do not keep looping for optional polish, speculative improvements, or findings already deferred by the parent.
 

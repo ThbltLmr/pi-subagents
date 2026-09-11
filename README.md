@@ -1,129 +1,59 @@
-<p>
-  <img src="https://raw.githubusercontent.com/nicobailon/pi-subagents/main/banner.png" alt="pi-subagents" width="1100">
-</p>
+# pi-subagents — personal fork
 
-# pi-subagents
-
-Personal fork of `nicobailon/pi-subagents`, based on v0.67.0. The `personal` branch removes delegation policy from the parent `subagent` tool description and advertised-agent catalog. See [FORK.md](FORK.md) for installation, scope, and upstream updates. The documentation below otherwise describes upstream behavior.
-
-`pi-subagents` lets Pi delegate work to focused child agents. Use it for code review, scouting, implementation, parallel audits, saved workflows, background jobs, and anything else that benefits from a second or third set of model eyes.
-
-<https://github.com/user-attachments/assets/702554ec-faaf-4635-80aa-fb5d6e292fd1>
+A fork of [nicobailon/pi-subagents](https://github.com/nicobailon/pi-subagents), based on v0.67.0. It retains the execution engine but ships no agent personas or external CLI profiles. See [FORK.md](FORK.md) for the patch history and update procedure.
 
 ## Install
 
-```bash
+```sh
 pi install git:github.com/ThbltLmr/pi-subagents@personal
 ```
 
-That is the only required step. Background children use the host's SDK: npm Pi keeps its detached Node runner; the official Pi 0.85.1 Linux x64 standalone release loads the same runner through Pi's embedded SDK, without a separate SDK install. See [Standalone background execution](docs/standalone-background.md) for the supported boundary and validation gate.
+For the local config repository, load `./plugins/pi-subagents` instead. Do not load both copies. Run `/reload` after updating the checkout.
 
-## Try this first
+## Spawn a child
 
-You do not need to create agents, write config, or learn slash commands. After installing, ask Pi in plain language:
-
-```text
-Use reviewer to review this diff.
+```js
+subagent({
+  task: "Inspect src/auth and report concrete bugs. Do not edit files.",
+  model: "provider/model"
+});
 ```
 
-```text
-Ask oracle for a second opinion on my current plan. Challenge assumptions and tell me what I might be missing.
+Only `task` is needed. `model` is optional. A plain child keeps Pi's normal system prompt, applicable `AGENTS.md` context, tools, and skill discovery. The plugin adds no role prompt, default reads, or automatic acceptance contract.
+
+Context defaults to **fresh**, including when a global preference says `fork`. Pass `context: "fork"` explicitly to inherit a usable parent session. Include the context a fresh child needs in its task.
+
+## Workflows
+
+Sequential and parallel launches use the same task-only shape:
+
+```js
+subagent({
+  async: true,
+  workflowScript: `
+    const results = await runs.all([
+      { key: "correctness", task: "Review the current diff for correctness. Do not edit files." },
+      { key: "tests", task: "Review test coverage of the current diff. Do not edit files." }
+    ]);
+    return results.map(result => result.output);
+  `
+});
 ```
 
-```text
-Use scout to understand this code based on our discussion, then ask me clarification questions.
-```
+`runs.run`, staged lanes, managed worktrees, retained-session resumes, supervision, cancellation, and result artifacts remain available. Async runs notify the parent on completion.
 
-```text
-Run parallel reviewers: one for correctness, one for tests, and one for unnecessary complexity.
-```
+## Optional custom profiles
 
-That is enough to start. Pi decides whether to call the `subagent` tool, which agent to use, and how to compose the work.
+Use `agent: "my-profile"` only for a profile you have configured. User, project, package, and runtime-registered profiles remain supported, as do external runners. Named profiles retain their configured prompt, tools, model, and context behavior. There are no implicit `worker`, `reviewer`, `oracle`, or CLI profiles.
 
-## How it works
+An `allowedAgents` capability ceiling permits named profiles only. A task-only call fails under that restriction rather than bypassing it. Tool-only ceilings still apply to plain children.
 
-Pi is the parent session. A subagent is a focused child Pi session with its own job.
+## Controls and reference
 
-When you ask for a subagent, Pi starts the child, gives it the task, and brings the result back. Foreground children run as sessions inside the parent Pi process and stream in the conversation. Background children run as sessions inside a detached runner process that keeps working and can be checked later.
+- `/subagents-fleet`: inspect running children, transcripts, and controls.
+- `/subagents-doctor`: diagnose setup.
+- `subagent({ action: "list" })`: list configured profiles, not plain children.
+- [Configuration](docs/configuration.md), [workflows](docs/workflows.md), [tool reference](docs/tool-reference.md), and [extension API](docs/extension-api.md).
+- [Custom profiles](docs/agents.md), [models](docs/models.md), [observability](docs/observability.md), and [missions](docs/missions.md).
 
-Installing the extension does not start an automatic reviewer in the background. It gives Pi a delegation tool. If you want every implementation reviewed, say so in your prompt or project instructions:
-
-```text
-When you finish implementing, run a reviewer subagent before summarizing.
-```
-
-## Builtin agents
-
-The extension ships with agents you can use immediately:
-
-| Agent | Use it when you want... |
-|-------|--------------------------|
-| `scout` | Fast local codebase recon: relevant files, entry points, data flow, risks. |
-| `researcher` | Web/docs research with sources and a concise research brief. Requires [pi-web-access in the child](docs/agents.md#web-research-prerequisites). |
-| `evidence-auditor` | Independently checks whether important research claims are supported by their sources. Requires [pi-web-access in the child](docs/agents.md#web-research-prerequisites). |
-| `worker` | Implementation work. Edits files, validates, escalates unapproved decisions instead of guessing. |
-| `reviewer` | Code review and small fixes against the task/plan, tests, edge cases, and simplicity. |
-| `oracle` | A second opinion before acting. Challenges assumptions without editing. |
-| `delegate` | A lightweight general delegate that behaves close to the parent session. |
-
-Rule of thumb: `scout` before you understand the code, `researcher` before you trust external facts, `evidence-auditor` before you rely on important research, `worker` to implement, `reviewer` to check, and `oracle` when the decision itself feels risky.
-
-## Common workflows
-
-The package includes `/council` and `council-mode`, plus documented model-based
-`council-*` profile examples that you add in your own agent directory.
-
-| Want | Ask naturally |
-|------|---------------|
-| Get a second opinion | "Ask oracle to review this plan and challenge assumptions." |
-| Solve a hard problem | "Use oracle to investigate this bug before we edit." |
-| Review a diff | "Use reviewer to review this diff." |
-| Run parallel reviewers | "Run reviewers for correctness, tests, and cleanup." |
-| Debate a material decision | "Use `/council` with model-based advisors to compare this decision." |
-| Implement then review | "Implement this, then review it." |
-| Review until clean | "Run a review loop on this change with a max of 3 rounds." |
-| Execute a plan carefully | "Have worker implement this approved plan, then run reviewers and apply the feedback." |
-| Scout before planning | "Use scout to inspect the auth flow before planning." |
-| Run in the background | "Run this in the background." |
-| Use a saved workflow | "Run the review chain on this branch." |
-| Browse agents | "Show me the available subagents." |
-| See running work | "Show active async runs." or "Show the subagent fleet." |
-| Check setup | "Check whether subagents are configured correctly." |
-
-For implementation work, the recommended loop is `clarify → scout → worker → fresh reviewers → worker`. Packaged prompt shortcuts like `/parallel-review` and `/review-loop` make these patterns repeatable — see [Workflows](https://github.com/nicobailon/pi-subagents/blob/main/docs/workflows.md).
-
-## Where running work shows up
-
-Foreground runs stream progress in the conversation. Background runs keep working after control returns to you.
-
-In the TUI, a persistent FleetView below the editor keeps active work visible. `/subagents-fleet` opens a live inspector where you can browse children, read transcripts, steer a running child, or stop a run. You can also just ask: "Show me the current async runs."
-
-Details, keybindings, and the machine-readable run artifacts are in [Observability](https://github.com/nicobailon/pi-subagents/blob/main/docs/observability.md).
-
-For bounded orchestration, `maxSubagentSpawnsPerRun` limits cumulative logical children in one run tree. It defaults to 64 and stays separate from active concurrency and the session-wide cumulative spawn budget. See [Configuration](https://github.com/nicobailon/pi-subagents/blob/main/docs/configuration.md#maxsubagentspawnsperrun).
-
-## If something feels off
-
-```text
-/subagents-doctor
-```
-
-or ask: "Check whether subagents and intercom are set up correctly."
-
-For installed-version help, use `/subagents-guide [topic]` or `subagent({ action: "guide", topic: "workflows" })`. The default topic is `overview`; available topics are `overview`, `workflows`, `agents`, `missions`, `observability`, `tool-reference`, `configuration`, `models`, `watchdog`, and `extension-api`.
-
-## Documentation
-
-The full reference lives in `docs/`:
-
-| Doc | What's in it |
-|-----|--------------|
-| [Agents](https://github.com/nicobailon/pi-subagents/blob/main/docs/agents.md) | Custom agents, frontmatter reference, overriding builtins, tools, extensions, skills, per-agent memory. |
-| [Models](https://github.com/nicobailon/pi-subagents/blob/main/docs/models.md) | Default models, per-role overrides, recommended tiering, fallbacks, thinking levels, model scope enforcement, profiles. |
-| [Workflows](https://github.com/nicobailon/pi-subagents/blob/main/docs/workflows.md) | Orchestration patterns, prompt shortcuts, scripted workflows, worktree isolation, child-to-parent coordination, the recursion guard. |
-| [Watchdog](https://github.com/nicobailon/pi-subagents/blob/main/docs/watchdog.md) | The opt-in adversarial change reviewer, scope monitoring, LSP checks, and child tool permissions. |
-| [Tool reference](https://github.com/nicobailon/pi-subagents/blob/main/docs/tool-reference.md) | Every `subagent` parameter, management actions, status/control actions, acceptance gates, external CLI runners. |
-| [Observability](https://github.com/nicobailon/pi-subagents/blob/main/docs/observability.md) | FleetView, the fleet inspector, lifecycle artifacts, events, logs, session sharing. |
-| [Missions and schedules](https://github.com/nicobailon/pi-subagents/blob/main/docs/missions.md) | Durable mission records, delivery receipts, timed and recurring runs. |
-| [Configuration](https://github.com/nicobailon/pi-subagents/blob/main/docs/configuration.md) | Every `config.json` key and environment variable. |
-| [Extension API](https://github.com/nicobailon/pi-subagents/blob/main/docs/extension-api.md) | The RPC, delegation API, preflight, capability ceilings, [trusted workflow resources](docs/extension-api.md#trusted-workflow-resources), background-work providers, Herdr integration. |
+The detailed reference retains upstream examples. Any named profile in those examples must be installed explicitly; this fork provides none. For a plain child, omit `agent` and supply a task.
