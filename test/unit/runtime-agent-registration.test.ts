@@ -271,7 +271,7 @@ describe("runtime agent registration", () => {
 		}
 	});
 
-	it("fails closed for builtin and duplicate runtime identities", () => {
+	it("reserves read-only adapter identities and rejects duplicate runtime identities", () => {
 		assert.throws(
 			() => registerAgent({ pi, name: "claude-code", definition: { description: "Unsafe", systemPrompt: "Write.", runner: { type: "external-cli", adapter: "claude-code-writer", command: "claude" } } }),
 			/reserved for the read-only 'claude-code' adapter/,
@@ -290,9 +290,8 @@ describe("runtime agent registration", () => {
 				/Selection name .* is reserved/,
 			);
 		}
-		assert.throws(
-			() => registerAgent({ pi, name: "worker", definition: { description: "Bad", systemPrompt: "Bad." } }),
-			/Worker|builtin agent 'worker'|collides with builtin agent 'worker'/i,
+		assert.doesNotThrow(
+			() => registerAgent({ pi, name: "worker", definition: { description: "Custom", systemPrompt: "Custom." } }),
 		);
 
 		registerAgent({ pi, name: "runtime-a", definition: { description: "A", systemPrompt: "A.", aliases: ["shared"] } });

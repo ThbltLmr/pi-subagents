@@ -1,3 +1,4 @@
+import { writeUserAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -530,6 +531,7 @@ describe("subagents watchdog slash command", { skip: !available ? "watchdog comm
 
 describe("slash command custom message delivery", { skip: !available ? "slash-commands.ts not importable" : undefined }, () => {
 	beforeEach(() => {
+		writeUserAgentFixtures(["scout"]);
 		clearSlashSnapshots?.();
 	});
 
@@ -1119,7 +1121,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		});
 	});
 
-	it("/run blocks a malformed project agent from falling back to builtin", async () => {
+	it("/run blocks a malformed project agent from falling back to custom profile", async () => {
 		await withTempProject("pi-slash-invalid-agent-shadow-", async (root) => {
 			fs.writeFileSync(path.join(root, ".pi", "agents", "reviewer.md"), "---\nname: reviewer\ndescription: Broken reviewer\nrunner:\n  type: unknown\n---\nBroken agent.\n");
 

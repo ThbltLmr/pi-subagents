@@ -259,10 +259,8 @@ function qualityTierToRoleTier(quality: QualityTier, cost: CostTier): Recommende
 	return "cheap";
 }
 
-function agentsForRoleTier(roleTier: RecommendedRoleTier): BuiltinAgentName[] {
-	if (roleTier === "cheap") return ["scout", "delegate"];
-	if (roleTier === "medium") return ["researcher", "reviewer"];
-	return ["worker", "reviewer", "oracle"];
+function agentsForRoleTier(_roleTier: RecommendedRoleTier): BuiltinAgentName[] {
+	return [];
 }
 
 function classifyModel(input: ModelClassificationInput, context: ClassificationContext): {

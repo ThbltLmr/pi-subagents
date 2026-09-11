@@ -1,3 +1,4 @@
+import { writeCustomAgentFixtures, writeUserAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -40,6 +41,8 @@ describe("subagents.defaultExtensions", () => {
 		process.env.HOME = tempHome;
 		process.env.USERPROFILE = tempHome;
 		delete process.env.PI_CODING_AGENT_DIR;
+		writeCustomAgentFixtures(path.join(tempProject, ".pi", "agents"), ["scout"]);
+		writeUserAgentFixtures(["scout"]);
 	});
 
 	afterEach(() => {
@@ -55,7 +58,7 @@ describe("subagents.defaultExtensions", () => {
 	});
 
 	it("preserves ambient discovery when omitted and disables it when empty", () => {
-		let scout = discoverAgentsAll(tempProject).builtin.find(
+		let scout = discoverAgentsAll(tempProject).project.find(
 			(agent) => agent.name === "scout",
 		);
 		assert.equal(scout?.extensions, undefined);
@@ -63,7 +66,7 @@ describe("subagents.defaultExtensions", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: { defaultExtensions: [] },
 		});
-		scout = discoverAgentsAll(tempProject).builtin.find(
+		scout = discoverAgentsAll(tempProject).project.find(
 			(agent) => agent.name === "scout",
 		);
 		assert.deepEqual(scout?.extensions, []);

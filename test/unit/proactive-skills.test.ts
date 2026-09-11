@@ -36,6 +36,7 @@ function chain(name: string, skills: string[]): ChainConfig {
 describe("proactive skill subagent recommendations", () => {
 	it("recommends available skills referenced by multiple enabled configs", () => {
 		const recommendations = recommendProactiveSkillSubagents({
+			config: { enabled: true, preferredAgent: "reviewer" },
 			agents: [
 				agent("reviewer"),
 				agent("ui-reviewer", ["accessibility"]),
@@ -64,7 +65,7 @@ describe("proactive skill subagent recommendations", () => {
 				agent("three", ["gamma"]),
 			],
 			availableSkills: [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
-			config: { preferredAgent: "delegate", maxRecommendations: 2 },
+			config: { enabled: true, preferredAgent: "delegate", maxRecommendations: 2 },
 		});
 
 		assert.deepEqual(recommendations.map((entry) => entry.skill), ["alpha", "beta"]);
@@ -73,6 +74,7 @@ describe("proactive skill subagent recommendations", () => {
 
 	it("can be disabled and formats guardrails for visible suggestions", () => {
 		assert.equal(resolveProactiveSkillSubagentsConfig(false).enabled, false);
+		assert.equal(resolveProactiveSkillSubagentsConfig().enabled, false);
 		assert.deepEqual(recommendProactiveSkillSubagents({
 			agents: [agent("reviewer", ["deslop"]), agent("cleanup", ["deslop"])],
 			availableSkills: [{ name: "deslop" }],
@@ -106,6 +108,7 @@ describe("proactive skill subagent recommendations", () => {
 		assert.equal(discoveryCalls, 0);
 
 		const failedDiscoveryLines = buildProactiveSkillSubagentRecommendationLines({
+			config: { enabled: true },
 			agents: [agent("reviewer", ["deslop"]), agent("cleanup", ["deslop"])],
 			discoverAvailableSkills: () => {
 				discoveryCalls++;

@@ -122,7 +122,7 @@ function inferLevel(input: {
 			reasons,
 			criteria: ["Implement the requested change without widening scope", "Return evidence sufficient for an independent acceptance review"],
 			evidence: requiredEvidenceForLevel("checked"),
-			review: { agent: "reviewer", required: true },
+			review: { required: true },
 		};
 	}
 	if (writeTask && !readOnlyTask) {

@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { writeCustomAgentFixtures } from "../support/custom-agent-fixtures.ts";
+
+let fixtureCwd: string;
 import { handleList } from "../../src/agents/agent-management.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
@@ -27,6 +33,11 @@ function agent(name: string): AgentConfig {
 }
 
 describe("capability ceiling agent allowlist", () => {
+	beforeEach(() => {
+		fixtureCwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-allowlist-fixtures-"));
+		writeCustomAgentFixtures(path.join(fixtureCwd, ".pi", "agents"), ["worker", "reviewer"]);
+	});
+	afterEach(() => fs.rmSync(fixtureCwd, { recursive: true, force: true }));
 	it("parses, round-trips, and intersects allowedAgents", () => {
 		const parsed = parseSubagentCapabilityCeiling({ version: 1, allowedAgents: ["worker", "reviewer", "worker"], denyExtensions: false, sources: ["plan"] });
 		assert.deepEqual(parsed.allowedAgents, ["reviewer", "worker"]);
@@ -52,7 +63,7 @@ describe("capability ceiling agent allowlist", () => {
 		const sessionId = `allowlist-list-${Date.now()}-${Math.random()}`;
 		const handle = registerSubagentCapabilityCeiling({ sessionId, source: "plan-mode", ceiling: { allowedAgents: ["reviewer"] } });
 		try {
-			const result = handleList({}, { cwd: process.cwd(), currentSessionId: sessionId, modelRegistry: { getAvailable: () => [] } });
+			const result = handleList({}, { cwd: fixtureCwd, currentSessionId: sessionId, modelRegistry: { getAvailable: () => [] } });
 			const text = result.content[0]?.text ?? "";
 			assert.match(text, /Executable agents:/);
 			assert.match(text, /- reviewer /);
@@ -66,7 +77,7 @@ describe("capability ceiling agent allowlist", () => {
 	it("rejects a non-allowlisted agent in preflight launch resolution", async () => {
 		const result = await resolveSubagentLaunchContract({
 			agent: "worker",
-			cwd: process.cwd(),
+			cwd: fixtureCwd,
 			capabilityCeiling: { version: 1, allowedAgents: ["reviewer"], denyExtensions: false, sources: ["plan-mode"] },
 		});
 		assert.equal(result.ok, false);

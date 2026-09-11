@@ -41,24 +41,6 @@ describe("builtin agent disabling", () => {
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
 
-	it("filters a per-agent disabled builtin from runtime discovery while keeping it in discoverAgentsAll", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: {
-				agentOverrides: {
-					reviewer: { disabled: true },
-				},
-			},
-		});
-
-		const runtimeReviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.equal(runtimeReviewer, undefined);
-
-		const allReviewer = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "reviewer");
-		assert.ok(allReviewer);
-		assert.equal(allReviewer.disabled, true);
-		assert.equal(allReviewer.override?.scope, "user");
-	});
-
 	it("surfaces malformed disabled overrides instead of silently ignoring them", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
 		writeJson(settingsPath, {
@@ -78,72 +60,6 @@ describe("builtin agent disabling", () => {
 		);
 	});
 
-	it("bulk disableBuiltins hides builtins at runtime and marks them disabled in discoverAgentsAll", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { disableBuiltins: true },
-		});
-
-		const runtimeBuiltinCount = discoverAgents(tempProject, "both").agents.filter((agent) => agent.source === "builtin").length;
-		assert.equal(runtimeBuiltinCount, 0);
-
-		const allBuiltins = discoverAgentsAll(tempProject).builtin;
-		assert.ok(allBuiltins.length > 0);
-		assert.ok(allBuiltins.every((agent) => agent.disabled === true));
-		assert.ok(allBuiltins.every((agent) => agent.override?.scope === "user"));
-	});
-
-	it("an explicit user override opts a builtin out of user-scope bulk disable", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: {
-				disableBuiltins: true,
-				agentOverrides: {
-					reviewer: { model: "openai/gpt-5.4" },
-				},
-			},
-		});
-
-		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.disabled, undefined);
-		assert.equal(reviewer.model, "openai/gpt-5.4");
-		assert.equal(reviewer.override?.scope, "user");
-	});
-
-	it("project disableBuiltins false re-enables builtins hidden by user bulk disable", () => {
-		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { disableBuiltins: true },
-		});
-		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { disableBuiltins: false },
-		});
-
-		assert.ok(discoverAgents(tempProject, "both").agents.some((agent) => agent.source === "builtin"));
-	});
-
-	it("project bulk disable beats user per-agent re-enable overrides", () => {
-		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: {
-				disableBuiltins: true,
-				agentOverrides: {
-					reviewer: { disabled: false, model: "openai/gpt-5.4" },
-				},
-			},
-		});
-		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: { disableBuiltins: true },
-		});
-
-		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.equal(reviewer, undefined);
-
-		const allReviewer = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "reviewer");
-		assert.ok(allReviewer);
-		assert.equal(allReviewer.disabled, true);
-		assert.equal(allReviewer.override?.scope, "project");
-	});
-
 	it("surfaces malformed disableBuiltins values instead of silently ignoring them", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
 		writeJson(settingsPath, {
@@ -158,33 +74,7 @@ describe("builtin agent disabling", () => {
 		);
 	});
 
-	it("hides disabled builtins from agent-facing management list output", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: { disableBuiltins: true },
-		});
-		const agentsDir = path.join(tempProject, ".pi", "agents");
-		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(
-			path.join(agentsDir, "helper.md"),
-			"---\nname: helper\ndescription: Helper\n---\n\nHelp.\n",
-			"utf-8",
-		);
-		const disabledBuiltinNames = discoverAgentsAll(tempProject).builtin.map((agent) => agent.name);
-		assert.ok(disabledBuiltinNames.length > 0);
-
-		const text = readText(handleList(
-			{},
-			{ cwd: tempProject, modelRegistry: { getAvailable: () => [] } },
-		));
-
-		assert.match(text, /^- helper \(project\): Helper$/m);
-		assert.doesNotMatch(text, /Disabled builtins:/);
-		for (const name of disabledBuiltinNames) {
-			assert.doesNotMatch(text, new RegExp(`^- ${name} \\(builtin`, "m"));
-		}
-	});
-
-	it("buildBuiltinOverrideConfig emits disabled false when re-enabling a builtin", () => {
+	it("buildBuiltinOverrideConfig emits disabled false when re-enabling a custom profile", () => {
 		const override = buildBuiltinOverrideConfig(
 			{
 				systemPromptMode: "replace",

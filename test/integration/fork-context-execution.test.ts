@@ -1,4 +1,5 @@
 import { describe, it, before, after, beforeEach, afterEach } from "node:test";
+import { writeCustomAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1323,7 +1324,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 
 
 
-	it("uses request cwd for project builtin overrides during management", async () => {
+	it("uses request cwd for project custom-profile overrides during management", async () => {
 		const tempHome = createTempDir("pi-subagent-home-");
 		process.env.HOME = tempHome;
 		process.env.USERPROFILE = tempHome;
@@ -1331,6 +1332,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		fs.mkdirSync(worktreeDir, { recursive: true });
 		writeProjectOverride(tempDir, "reviewer", "openai/gpt-5-main");
 		writeProjectOverride(worktreeDir, "reviewer", "openai/gpt-5-worktree");
+		writeCustomAgentFixtures(path.join(worktreeDir, ".pi", "agents"), ["reviewer"]);
 		const executor = makeExecutor();
 
 		try {

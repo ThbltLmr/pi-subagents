@@ -4,8 +4,7 @@ import type { ProactiveSkillSubagentsConfig } from "../shared/types.ts";
 const SUBAGENT_ORCHESTRATION_SKILL = "pi-subagents";
 const DEFAULT_MIN_REFERENCES = 2;
 const DEFAULT_MAX_RECOMMENDATIONS = 3;
-const DEFAULT_PREFERRED_AGENT = "reviewer";
-const FALLBACK_AGENT_ORDER = ["reviewer", "delegate"];
+const DEFAULT_PREFERRED_AGENT = "";
 const MAX_RECOMMENDATION_CAP = 5;
 
 export interface ResolvedProactiveSkillSubagentsConfig {
@@ -49,7 +48,7 @@ export function resolveProactiveSkillSubagentsConfig(
 
 	const maxRecommendations = positiveInteger(config?.maxRecommendations) ?? DEFAULT_MAX_RECOMMENDATIONS;
 	return {
-		enabled: config?.enabled ?? true,
+		enabled: config?.enabled ?? false,
 		minReferences: positiveInteger(config?.minReferences) ?? DEFAULT_MIN_REFERENCES,
 		maxRecommendations: Math.min(maxRecommendations, MAX_RECOMMENDATION_CAP),
 		preferredAgent: typeof config?.preferredAgent === "string" && config.preferredAgent.trim()
@@ -92,9 +91,6 @@ function collectStepSkills(step: ChainStepConfig, out: Set<string>): void {
 function chooseRecommendationAgent(agents: AgentConfig[], preferredAgent: string): string | undefined {
 	const enabled = agents.filter((agent) => !agent.disabled);
 	if (enabled.some((agent) => agent.name === preferredAgent)) return preferredAgent;
-	for (const name of FALLBACK_AGENT_ORDER) {
-		if (enabled.some((agent) => agent.name === name)) return name;
-	}
 	return enabled[0]?.name;
 }
 

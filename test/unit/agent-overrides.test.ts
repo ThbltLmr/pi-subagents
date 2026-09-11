@@ -1,3 +1,4 @@
+import { writeCustomAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -29,7 +30,7 @@ function writeUserAgent(home: string, name: string, body: string): void {
 	fs.writeFileSync(filePath, body, "utf-8");
 }
 
-describe("builtin agent overrides", () => {
+describe("custom fixture agent overrides", () => {
 	beforeEach(() => {
 		tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-home-"));
 		tempProject = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-project-"));
@@ -37,6 +38,8 @@ describe("builtin agent overrides", () => {
 		process.env.USERPROFILE = tempHome;
 		delete process.env.PI_CODING_AGENT_DIR;
 		delete process.env.PI_SUBAGENT_EXTRA_AGENT_DIRS;
+		writeCustomAgentFixtures(path.join(tempHome, ".pi", "agent", "agents"));
+		writeCustomAgentFixtures(path.join(tempProject, ".pi", "agents"));
 	});
 
 	afterEach(() => {
@@ -52,8 +55,8 @@ describe("builtin agent overrides", () => {
 		fs.rmSync(tempProject, { recursive: true, force: true });
 	});
 
-	it("bundled builtin agents inherit the default model", () => {
-		const builtins = discoverAgentsAll(tempProject).builtin;
+	it("custom fixture agents inherit the default model", () => {
+		const builtins = discoverAgentsAll(tempProject).project;
 		assert.ok(builtins.length > 0);
 		assert.deepEqual(
 			builtins
@@ -63,7 +66,7 @@ describe("builtin agent overrides", () => {
 		);
 	});
 
-	it("applies subagents.defaultModel to builtin agents with explicit overrides winning", () => {
+	it("applies subagents.defaultModel to custom fixture agents with explicit overrides winning", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				defaultModel: "deepseek-v4-flash",
@@ -74,7 +77,7 @@ describe("builtin agent overrides", () => {
 			},
 		});
 
-		const builtins = discoverAgentsAll(tempProject).builtin;
+		const builtins = discoverAgentsAll(tempProject).project;
 		const scout = builtins.find((agent) => agent.name === "scout");
 		assert.equal(scout?.model, "deepseek-v4-flash");
 		assert.equal(scout?.modelSource?.type, "subagents.defaultModel");
@@ -88,7 +91,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(reviewer?.modelSource, undefined);
 	});
 
-	it("lets a builtin agent inherit Pi's normal tools from an override", () => {
+	it("lets a custom fixture agent inherit Pi's normal tools from an override", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
@@ -102,7 +105,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(researcher?.mcpDirectTools, undefined);
 	});
 
-	it("keeps strict builtin tools unless a role opts into inheritance", () => {
+	it("keeps strict custom profile tools unless a role opts into inheritance", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
@@ -111,12 +114,12 @@ describe("builtin agent overrides", () => {
 			},
 		});
 
-		const builtins = discoverAgentsAll(tempProject).builtin;
+		const builtins = discoverAgentsAll(tempProject).project;
 		assert.equal(builtins.find((agent) => agent.name === "researcher")?.tools, undefined);
 		assert.deepEqual(builtins.find((agent) => agent.name === "reviewer")?.tools, ["read", "grep", "find", "ls", "contact_supervisor"]);
 	});
 
-	it("keeps explicit empty builtin tool allowlists distinct from inherited tools", () => {
+	it("keeps explicit empty custom profile tool allowlists distinct from inherited tools", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
@@ -130,7 +133,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(researcher?.mcpDirectTools, undefined);
 	});
 
-	it("applies excludeTools settings overrides to builtin agents", () => {
+	it("applies excludeTools settings overrides to custom fixture agents", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
@@ -172,7 +175,7 @@ describe("builtin agent overrides", () => {
 			},
 		});
 
-		const worker = discoverAgentsAll(tempProject).builtin.find((agent) => agent.name === "worker");
+		const worker = discoverAgentsAll(tempProject).project.find((agent) => agent.name === "worker");
 		assert.equal(worker?.model, "deepseek-v4-flash");
 		assert.equal(worker?.modelSource, undefined);
 	});
@@ -207,7 +210,7 @@ describe("builtin agent overrides", () => {
 			subagents: { defaultProvider: "gpu-project" },
 		});
 
-		const builtins = discoverAgentsAll(tempProject).builtin;
+		const builtins = discoverAgentsAll(tempProject).project;
 		const scout = builtins.find((agent) => agent.name === "scout");
 		assert.equal(scout?.model, "llama-3");
 		assert.equal(scout?.modelProvider, "gpu-project");
@@ -241,8 +244,8 @@ describe("builtin agent overrides", () => {
 		writeProjectAgent(tempProject, "explicit-off", `---\nname: explicit-off\ndescription: Explicitly disabled\nthinking: false\n---\n\nStay off.\n`);
 
 		const discovered = discoverAgentsAll(tempProject);
-		assert.equal(discovered.builtin.find((agent) => agent.name === "delegate")?.thinking, "xhigh");
-		assert.equal(discovered.builtin.find((agent) => agent.name === "reviewer")?.thinking, "high");
+		assert.equal(discovered.project.find((agent) => agent.name === "delegate")?.thinking, "xhigh");
+		assert.equal(discovered.project.find((agent) => agent.name === "reviewer")?.thinking, "high");
 		assert.equal(discovered.user.find((agent) => agent.name === "user-default")?.thinking, "low");
 		assert.equal(discovered.project.find((agent) => agent.name === "project-default")?.thinking, "low");
 		assert.equal(discovered.project.find((agent) => agent.name === "explicit-off")?.thinking, false);
@@ -262,7 +265,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(delegate.thinking, "high");
 	});
 
-	it("preserves custom-agent thinking when disableThinking clears builtin defaults", () => {
+	it("preserves custom-agent thinking when disableThinking clears custom profile defaults", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: { defaultThinking: "low", disableThinking: true },
 		});
@@ -270,7 +273,7 @@ describe("builtin agent overrides", () => {
 		writeProjectAgent(tempProject, "custom-explicit", `---\nname: custom-explicit\ndescription: Custom explicit\nthinking: high\n---\n\nUse the explicit level.\n`);
 
 		const discovered = discoverAgentsAll(tempProject);
-		assert.equal(discovered.builtin.find((agent) => agent.name === "reviewer")?.thinking, undefined);
+		assert.equal(discovered.project.find((agent) => agent.name === "reviewer")?.thinking, "high");
 		assert.equal(discovered.project.find((agent) => agent.name === "custom-default")?.thinking, "low");
 		assert.equal(discovered.project.find((agent) => agent.name === "custom-explicit")?.thinking, "high");
 	});
@@ -328,7 +331,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(agents.find((agent) => agent.name === "scout-copy")?.model, "deepseek-v4-flash");
 	});
 
-	it("overrides builtin and custom agent descriptions from settings", () => {
+	it("overrides custom profile and custom agent descriptions from settings", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
@@ -344,7 +347,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(agents.find((agent) => agent.name === "implementer")?.description, "Priced implementer");
 	});
 
-	it("applies user settings overrides to builtin agents", () => {
+	it("applies user settings overrides to custom fixture agents", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 					agentOverrides: {
@@ -367,7 +370,7 @@ describe("builtin agent overrides", () => {
 
 		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
 		assert.ok(reviewer);
-		assert.equal(reviewer.source, "builtin");
+		assert.equal(reviewer.source, "project");
 		assert.equal(reviewer.model, "openai/gpt-5.4");
 		assert.equal(reviewer.fast, true);
 		assert.equal(reviewer.thinking, "xhigh");
@@ -381,70 +384,6 @@ describe("builtin agent overrides", () => {
 		assert.equal(reviewer.completionGuard, false);
 		assert.equal(reviewer.override?.scope, "user");
 		assert.equal(reviewer.override?.path, path.join(tempHome, ".pi", "agent", "settings.json"));
-	});
-
-	it("globally disables builtin thinking suffix defaults from user settings", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: {
-				disableThinking: true,
-			},
-		});
-
-		const builtins = discoverAgentsAll(tempProject).builtin;
-		assert.ok(builtins.some((agent) => agent.name === "reviewer"));
-		assert.deepEqual(
-			builtins
-				.filter((agent) => agent.thinking !== undefined)
-				.map((agent) => agent.name),
-			[],
-		);
-		assert.equal(
-			builtins.find((agent) => agent.name === "reviewer")?.override?.path,
-			path.join(tempHome, ".pi", "agent", "settings.json"),
-		);
-	});
-
-	it("lets an explicit same-scope thinking override opt back in when global thinking is disabled", () => {
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: {
-				disableThinking: true,
-				agentOverrides: {
-					reviewer: {
-						thinking: "high",
-					},
-				},
-			},
-		});
-
-		const agents = discoverAgents(tempProject, "both").agents;
-		const reviewer = agents.find((agent) => agent.name === "reviewer");
-		const worker = agents.find((agent) => agent.name === "worker");
-		assert.ok(reviewer);
-		assert.ok(worker);
-		assert.equal(reviewer.thinking, "high");
-		assert.equal(worker.thinking, undefined);
-	});
-
-	it("lets project settings disable builtin thinking even when user overrides request it", () => {
-		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });
-		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
-			subagents: {
-				agentOverrides: {
-					reviewer: {
-						thinking: "xhigh",
-					},
-				},
-			},
-		});
-		writeJson(path.join(tempProject, ".pi", "settings.json"), {
-			subagents: {
-				disableThinking: true,
-			},
-		});
-
-		const reviewer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer);
-		assert.equal(reviewer.thinking, undefined);
 	});
 
 	it("surfaces malformed subagent default model settings", () => {
@@ -646,7 +585,7 @@ describe("builtin agent overrides", () => {
 		assert.equal(flipB, undefined, "project override (disabled: true) must win over user override (disabled: false), so the agent ends up disabled and unlisted");
 	});
 
-	it("applies acceptance role precedence and false clearing to builtin and custom agents", () => {
+	it("applies acceptance role precedence and false clearing to custom profile and custom agents", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: {
 				agentOverrides: {
@@ -947,7 +886,7 @@ describe("builtin agent overrides", () => {
 		);
 	});
 
-	it("surfaces malformed builtin override entries instead of silently ignoring them", () => {
+	it("surfaces malformed custom profile override entries instead of silently ignoring them", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
 		writeJson(settingsPath, {
 			subagents: {
@@ -1047,7 +986,7 @@ describe("builtin agent overrides", () => {
 		}
 	});
 
-	it("applies output and defaultReads overrides to bundled and package agents and supports false clears", () => {
+	it("applies output and defaultReads overrides to custom and package agents and supports false clears", () => {
 		const packageRoot = path.join(tempProject, "package-agents");
 		fs.mkdirSync(path.join(packageRoot, "agents"), { recursive: true });
 		writeJson(path.join(packageRoot, "package.json"), { "pi-subagents": { agents: ["agents"] } });
@@ -1085,7 +1024,7 @@ describe("builtin agent overrides", () => {
 		}
 	});
 
-	it("builds description changes and false sentinels when an override clears builtin fields", () => {
+	it("builds description changes and false sentinels when an override clears custom profile fields", () => {
 		const override = buildBuiltinOverrideConfig(
 			{
 				description: "Base description",

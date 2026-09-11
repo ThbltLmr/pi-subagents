@@ -1,3 +1,4 @@
+import { writeCustomAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -55,6 +56,7 @@ describe("thinking ceilings", () => {
 	});
 
 	it("loads maxThinking with project precedence and attaches it to discovered agents", () => {
+		writeCustomAgentFixtures(path.join(project, ".pi", "agents"), ["worker"]);
 		writeJson(path.join(home, ".pi", "agent", "settings.json"), { subagents: { maxThinking: "max" } });
 		fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
 		writeJson(path.join(project, ".pi", "settings.json"), { subagents: { maxThinking: "xhigh" } });

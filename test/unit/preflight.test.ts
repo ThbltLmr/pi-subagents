@@ -1,3 +1,4 @@
+import { writeUserAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -76,6 +77,7 @@ describe("public launch contract preflight", () => {
 	});
 
 	it("resolves an ordinary single-agent contract without creating launch directories", async () => {
+		writeUserAgentFixtures();
 		const cwd = path.join(tempDir, "repo");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeSkill(cwd, "project-skill");
@@ -119,7 +121,7 @@ Project prompt.
 			assert.equal(result.contract.agent.definitionProjectionVersion, 1);
 			assert.match(result.contract.agent.definitionDigest, /^[a-f0-9]{64}$/);
 			assert.match(result.contract.launchContractDigest, /^[a-f0-9]{64}$/);
-			assert.ok(result.contract.agent.shadowedCandidates.some((candidate) => candidate.name === "worker" && candidate.source === "builtin"));
+			assert.ok(result.contract.agent.shadowedCandidates.some((candidate) => candidate.name === "worker" && candidate.source === "user"));
 			assert.equal(result.contract.model, "test/primary:high");
 			assert.deepEqual(result.contract.modelCandidates, ["test/primary:high", "test/fallback:high"]);
 			assert.equal(result.contract.thinking, "high");
@@ -213,6 +215,7 @@ Project prompt.
 	});
 
 	it("uses the parent provider for provider-scoped agent overrides", async () => {
+		writeUserAgentFixtures();
 		const cwd = path.join(tempDir, "provider-overrides");
 		fs.mkdirSync(cwd, { recursive: true });
 		writeJson(path.join(cwd, ".pi", "settings.json"), {

@@ -16,13 +16,19 @@ Task-only children keep Pi's base system prompt, applicable global and project c
 
 An `allowedAgents` capability restriction permits named profiles only; task-only launches fail with an explanation rather than bypassing it. Tool-only ceilings still apply to plain children. `__task__` is a reserved internal execution identity, not a selectable profile or alias.
 
+## No bundled profiles
+
+The fork ships no native personas or external CLI profiles. User, project, package, and runtime-registered custom profiles still work. Profile names do not get special prompt defaults.
+
+Prompt workflows without an explicit profile and refinement proposals launch plain children. The named `review` workflow also uses a plain child, with a read-only tool ceiling. Proactive skill-based profile suggestions are off unless explicitly enabled; there is no preferred reviewer or delegate.
+
 ## Prompt changes
 
 The `subagent` tool description is `Run configured subagents.` It has no `promptSnippet`, `promptGuidelines`, or appended delegation policy. The old `toolDescriptionMode` setting and custom Markdown description files have no effect.
 
 The opt-in advertised-agent catalog still includes escaped, bounded names and descriptions. It no longer adds instructions about delegation or agent selection.
 
-This is a parent-tool prompt patch, not a removal of every instruction in the package. Parameter descriptions, `bg_wait` and supervisor tool descriptions, bundled skills and prompt templates, child role prompts, child-runtime instructions, and runtime notifications remain upstream behavior. Permissions, launch validation, supervision, and execution limits are unchanged.
+This does not remove every runtime instruction. Parameter descriptions, `bg_wait` and supervisor tools, bundled skills and prompt templates, child-runtime instructions, and notifications remain. Permissions, launch validation, supervision, and execution limits are retained.
 
 ## Local installation
 

@@ -19,6 +19,7 @@ import {
 	type ProgressSummary, type ArtifactPaths, type LaunchResolvedExtensions,
 	type RuntimeAcknowledgedExtensions, type RunSyncResult, type ExecutorToolResult,
 } from "../support/single-execution-fixture.ts";
+import { writeCustomAgentFixtures, writeUserAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -823,6 +824,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 	});
 
 	it("routes registered structured text delegation through the concurrent executor", async () => {
+		writeUserAgentFixtures(["worker", "reviewer"]);
 		const literalJsonText = '{"looks":"json"}';
 		mockPi.onCall({
 			steps: [
@@ -3660,12 +3662,13 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "fresh assistant output");
 	});
 
-	it("top-level reviewer runs do not inherit bundled chain artifact reads", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("custom profiles without defaultReads do not inherit chain artifact reads", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"), ["reviewer"]);
 		fs.writeFileSync(path.join(tempDir, "plan.md"), "chain plan");
 		fs.writeFileSync(path.join(tempDir, "progress.md"), "chain progress");
 		mockPi.onCall({ output: "Review done" });
 		const reviewer = discoverAgents(tempDir, "project").agents.find((agent) => agent.name === "reviewer");
-		assert.ok(reviewer, "expected bundled reviewer");
+		assert.ok(reviewer, "expected custom reviewer fixture");
 		assert.equal(reviewer.defaultReads, undefined);
 		const executor = makeExecutor([reviewer]);
 

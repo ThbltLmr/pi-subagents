@@ -1,3 +1,4 @@
+import { writeCustomAgentFixtures } from "../support/custom-agent-fixtures.ts";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -110,6 +111,7 @@ describe("agent management config parsing", () => {
 	});
 
 	it("reports bundled reviewer supervisor contact without mutation tools in capabilities", () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"));
 		const listed = handleManagementAction("list", { agentScope: "project", capabilities: true }, {
 			cwd: tempDir,
 			modelRegistry: { getAvailable: () => [] },
@@ -1381,7 +1383,8 @@ Drive the failing test first.
 		assert.doesNotMatch(afterText, /Thinking: off/);
 	});
 
-	it("reports builtin runtime-loaded model mappings from current session state", () => {
+	it("reports custom profile runtime-loaded model mappings from current session state", () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"));
 		const ctx = {
 			cwd: tempDir,
 			modelRegistry: {
@@ -1406,7 +1409,8 @@ Drive the failing test first.
 		assert.match(text, /Use an exact provider\/id from this list when you pass model/);
 	});
 
-	it("resolves the advisor builtin alias in a filtered model mapping", () => {
+	it("resolves the advisor custom profile alias in a filtered model mapping", () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"));
 		const result = handleManagementAction("models", { agent: "advisor" }, {
 			cwd: tempDir,
 			modelRegistry: { getAvailable: () => [{ provider: "openai", id: "gpt-5-mini" }] },
@@ -1420,6 +1424,7 @@ Drive the failing test first.
 	});
 
 	it("reports effective model mappings for discovered package, user, and project agents", () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"));
 		const projectAgentsDir = path.join(tempDir, ".pi", "agents");
 		const userAgentsDir = path.join(tempDir, "agent-home", "agents");
 		const packageDir = path.join(tempDir, ".pi", "npm", "node_modules", "model-agents");
@@ -1479,7 +1484,8 @@ Drive the failing test first.
 		assert.doesNotMatch(text, /api[_-]?key|token|secret/i);
 	});
 
-	it("reports override source and disabled builtin state in runtime model mappings", () => {
+	it("reports override source and disabled custom profile state in runtime model mappings", () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"));
 		const projectSettingsPath = path.join(tempDir, ".pi", "settings.json");
 		fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
 		fs.writeFileSync(projectSettingsPath, JSON.stringify({
@@ -1523,7 +1529,7 @@ Drive the failing test first.
 		assert.match(readText(result), /Agent 'not-a-builtin' not found/);
 	});
 
-	it("creates delegate with its builtin prompt defaults", () => {
+	it("creates a custom delegate without name-specific prompt defaults", () => {
 		const result = handleCreate(
 			{ config: { name: "delegate", description: "Delegate helper", scope: "project" } },
 			{ cwd: tempDir, modelRegistry: { getAvailable: () => [] } },
@@ -1532,13 +1538,14 @@ Drive the failing test first.
 		assert.equal(result.isError, false);
 		const filePath = path.join(tempDir, ".pi", "agents", "delegate.md");
 		const content = fs.readFileSync(filePath, "utf-8");
-		assert.match(content, /systemPromptMode: append/);
-		assert.match(content, /inheritProjectContext: true/);
+		assert.match(content, /systemPromptMode: replace/);
+		assert.match(content, /inheritProjectContext: false/);
 		assert.match(content, /inheritSkills: false/);
 	});
 
-	it("lists proactive skill subagent suggestions from repeated configured skill use", () => {
-		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+	it("lists proactive skill subagent suggestions when explicitly enabled", () => {
+		writeCustomAgentFixtures(path.join(tempDir, ".pi", "agents"));
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] }, config: { proactiveSkillSubagents: { enabled: true, preferredAgent: "reviewer" } } };
 		fs.mkdirSync(path.join(tempDir, ".pi", "agents"), { recursive: true });
 		fs.mkdirSync(path.join(tempDir, ".pi", "skills", "deslop"), { recursive: true });
 		fs.writeFileSync(path.join(tempDir, ".pi", "skills", "deslop", "SKILL.md"), `---

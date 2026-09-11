@@ -6196,7 +6196,6 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					state: deps.state,
 					signal,
 					launchProposalChild: (task, outputSchema, proposalSignal) => execute(randomUUID(), {
-						agent: "reviewer",
 						task,
 						context: "fresh",
 						async: false,
