@@ -268,8 +268,8 @@ const ControlOverrides = Type.Object({
 });
 
 const SubagentParamProperties = {
-	agent: Type.Optional(Type.String({ description: "One-child agent or management target." })),
-	task: Type.Optional(Type.String({ description: "One-child task; requires agent." })),
+	agent: Type.Optional(Type.String({ description: "Optional custom profile name, or management target. Omit for a plain Pi child." })),
+	task: Type.Optional(Type.String({ description: "One-child task. Required and non-empty when agent is omitted." })),
 	extensionBindings: Type.Optional(Type.Unsafe({ type: "object", maxProperties: 16, additionalProperties: true, description: "Child-only bounded JSON; namespaces package.name/1." })),
 	// Management action (when present, tool operates in management mode)
 	action: Type.Optional(Type.String({ minLength: 1,

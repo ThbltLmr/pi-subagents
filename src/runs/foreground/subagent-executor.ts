@@ -23,6 +23,7 @@ import { handleManagementAction } from "../../agents/agent-management.ts";
 import { handleRefinementAction } from "../../agents/agent-refinements.ts";
 import { buildDoctorReport } from "../../extension/doctor.ts";
 import { readSubagentGuide } from "../../extension/subagent-guide.ts";
+import { normalizeTaskSpawn, withTaskAgent } from "../../agents/task-agent.ts";
 import { normalizePublicSubagentExecution, validateWorkflowCapacityOverrides } from "../../extension/public-execution.ts";
 import { runSync } from "./execution.ts";
 import { handleWatchdogToolAction, WATCHDOG_TOOL_ACTIONS } from "../../watchdog/tool-actions.ts";
@@ -4659,7 +4660,7 @@ export function prepareWorkflowLaunchParams(
 	if (launchParams.extensionBindings !== undefined) launchParams.extensionBindings = normalizeExtensionBindings(launchParams.extensionBindings)!.value;
 	const normalizedGate = normalizeGateParams(launchParams);
 	if (!normalizedGate.ok) throw new Error(normalizedGate.error);
-	return normalizedGate.params;
+	return normalizeTaskSpawn(normalizedGate.params);
 }
 
 function mergeWorkflowControlOverrides(workflowControl: ControlConfig | undefined, childControl: ControlConfig | undefined): ControlConfig | undefined {
@@ -4868,6 +4869,8 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 	/** Scheduled state visible to the current runtime supervisor owner only. */
 	getCurrentSupervisorOwnerStates: () => Iterable<SubagentState>;
 } {
+	const discoverConfiguredAgents = deps.discoverAgents;
+	deps = { ...deps, discoverAgents: (...args) => withTaskAgent(discoverConfiguredAgents(...args)) };
 	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
 	const delegatedExecutions = new WeakSet<object>();
@@ -4901,7 +4904,12 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		deps.state.lastForegroundControlId ??= null;
 		const normalizedGate = normalizeGateParams(params);
 		if (!normalizedGate.ok) return buildRequestedModeError(params, normalizedGate.error);
-		let requestParams = normalizedGate.params;
+		let requestParams: SubagentParamsLike;
+		try {
+			requestParams = normalizeTaskSpawn(normalizedGate.params);
+		} catch (error) {
+			return buildRequestedModeError(params, error instanceof Error ? error.message : String(error));
+		}
 		const capacityOverrideError = validateWorkflowCapacityOverrides(requestParams);
 		if (capacityOverrideError) return buildRequestedModeError(requestParams, capacityOverrideError);
 		let workflowPreflight: import("../../shared/types.ts").WorkflowPreflight | undefined;

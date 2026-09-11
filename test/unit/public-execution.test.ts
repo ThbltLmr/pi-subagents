@@ -175,7 +175,7 @@ describe("public subagent execution normalization", () => {
 			{ action: "reject-checkpoint", id: "run" },
 			{ agent: "" },
 			{ agent: 42 },
-			{ task: "work" },
+			{ task: " " },
 			{ agent: "worker", task: 42 },
 			{ agent: "worker", workflowScript: "return 1" },
 			{ action: "status", task: "work" },

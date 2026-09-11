@@ -2,6 +2,20 @@
 
 This fork starts at upstream `v0.67.0`, commit `aa75b335`, and keeps the upstream history and MIT license. Local changes live on `personal`. The package name stays `pi-subagents` for imports and runtime discovery. It is not published to npm.
 
+## Task-only spawning
+
+A native child no longer needs a named profile:
+
+```js
+subagent({ task: "Implement pagination and run the tests", model: "provider/model" });
+```
+
+The same shape works in `runs.run(key, { task })`, `runs.all([{ key, task }])`, and workflow lanes. Omitted context means `fresh` for task-only calls, even if a global preference says `fork`. Explicit `context: "fork"` still requires a usable parent session. Named custom profiles remain optional and retain their configured defaults.
+
+Task-only children keep Pi's base system prompt, applicable global and project context files, and normal skill discovery. They have no role prompt, default reads, progress-file requirement, or automatic acceptance contract. Explicit acceptance and gates still work. Tool permissions and execution limits still apply.
+
+An `allowedAgents` capability restriction permits named profiles only; task-only launches fail with an explanation rather than bypassing it. Tool-only ceilings still apply to plain children. `__task__` is a reserved internal execution identity, not a selectable profile or alias.
+
 ## Prompt changes
 
 The `subagent` tool description is `Run configured subagents.` It has no `promptSnippet`, `promptGuidelines`, or appended delegation policy. The old `toolDescriptionMode` setting and custom Markdown description files have no effect.

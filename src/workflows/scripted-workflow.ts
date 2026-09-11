@@ -1,3 +1,4 @@
+import { TASK_AGENT_NAME } from "../agents/task-agent.ts";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
@@ -654,6 +655,7 @@ function validateRunCall(key, params, label, fingerprints) {
     const hint = label === "runs.run" ? "; use runs.all(...) and JavaScript control flow for orchestration." : ".";
     throw new Error(label + " accepts one child via { agent, task } and execution controls only" + hint);
   }
+  if (typeof params.agent === "string" && params.agent.trim() === ${JSON.stringify(TASK_AGENT_NAME)}) throw new Error(label + " internal task identity is not a profile; omit agent and provide a task.");
   if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
   if (params.worktree !== undefined && typeof params.worktree !== "boolean") throw new Error(label + " worktree must be true or false.");
   if (params.baseRef !== undefined && (typeof params.baseRef !== "string" || !validGitRef(params.baseRef))) throw new Error(label + " baseRef must be a valid Git ref: use HEAD or a supported named ref (for example, refs/heads/main). Full 40/64-character commit IDs and revision expressions are unsupported.");
@@ -2368,6 +2370,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (permitError) return respond(Promise.reject(new Error(permitError)));
 			if (options.oneUsePermit && message.args.batch !== undefined) return respond(Promise.reject(new Error("Workflow child permit does not support runs.all.")));
 			if (options.oneUsePermit && params.resume !== undefined) return respond(Promise.reject(new Error("Workflow child permit does not support retained resume.")));
+			if (typeof params.agent === "string" && params.agent.trim() === TASK_AGENT_NAME) return respond(Promise.reject(new Error("Internal task identity is not a profile; omit agent and provide a task.")));
 			if (params.action !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') accepts execution params only; management action is not allowed.`)));
 			if (params.workflowScript !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') cannot start a nested workflow script.`)));
 			if (params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {

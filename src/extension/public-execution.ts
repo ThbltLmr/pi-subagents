@@ -1,3 +1,4 @@
+import { TASK_AGENT_NAME } from "../agents/task-agent.ts";
 import { normalizeWorktreeBaseRef } from "../runs/shared/worktree.ts";
 
 export interface PublicSubagentExecutionParams {
@@ -203,8 +204,14 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		return { ok: false, error: "Structured single-child execution cannot be combined with workflow, workflowScript, or workflowScriptPath.", mode: "workflow" };
 	}
 	if (params.agent !== undefined || params.task !== undefined) {
-		if (typeof params.agent !== "string" || !params.agent.trim()) {
-			return { ok: false, error: "Structured single-child execution requires agent to be a non-empty string.", mode: "workflow" };
+		if (typeof params.agent === "string" && params.agent.trim() === TASK_AGENT_NAME) {
+			return { ok: false, error: "The internal task identity is not a profile. Omit agent and provide a non-empty task.", mode: "workflow" };
+		}
+		if (params.agent !== undefined && (typeof params.agent !== "string" || !params.agent.trim())) {
+			return { ok: false, error: "agent must be a non-empty custom profile name when provided.", mode: "workflow" };
+		}
+		if (params.agent === undefined && (typeof params.task !== "string" || !params.task.trim())) {
+			return { ok: false, error: "Task-only spawning requires a non-empty task.", mode: "workflow" };
 		}
 		if (params.task !== undefined && typeof params.task !== "string") {
 			return { ok: false, error: "Structured single-child task must be a string when provided.", mode: "workflow" };
@@ -213,13 +220,13 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 			ok: true,
 			params: {
 				...params,
-				agent: params.agent.trim(),
+				...(typeof params.agent === "string" ? { agent: params.agent.trim() } : {}),
 				output: params.output === undefined ? true : params.output,
 			} as T,
 		};
 	}
 	if (!hasValidWorkflowInput) {
-		return { ok: false, error: "Execution requires either { agent, task? } for one child, a named workflow resource, or a non-empty workflowScript or workflowScriptPath for orchestration.", mode: "workflow" };
+		return { ok: false, error: "Execution requires { task, agent? } for one child, a named workflow resource, or a non-empty workflowScript or workflowScriptPath for orchestration.", mode: "workflow" };
 	}
 	return { ok: true, params };
 }

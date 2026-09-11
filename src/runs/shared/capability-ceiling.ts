@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { TASK_AGENT_NAME } from "../../agents/task-agent.ts";
 
 export const SUBAGENT_CAPABILITY_CEILING_VERSION = 1 as const;
 export const SUBAGENT_CAPABILITY_CEILING_REGISTRY_KEY = "pi-subagents.capability-ceiling.v1";
@@ -172,12 +173,13 @@ export function resolveCurrentSubagentCapabilityCeiling(sessionId: string | unde
 }
 
 export function isAgentAllowedByCapabilityCeiling(agentName: string, ceiling: ResolvedSubagentCapabilityCeiling | undefined): boolean {
-	return ceiling?.allowedAgents === undefined || ceiling.allowedAgents.includes(agentName);
+	return ceiling?.allowedAgents === undefined || (agentName !== TASK_AGENT_NAME && ceiling.allowedAgents.includes(agentName));
 }
 
 export function capabilityCeilingAgentRestrictionMessage(agentName: string, ceiling: ResolvedSubagentCapabilityCeiling | undefined): string | undefined {
 	if (isAgentAllowedByCapabilityCeiling(agentName, ceiling)) return undefined;
 	const sources = ceiling?.sources.length ? ceiling.sources.join(", ") : "unknown source";
+	if (agentName === TASK_AGENT_NAME) return `Capability ceiling from ${sources} restricts launches to named profiles. Task-only spawning is unavailable; select an allowed custom profile.`;
 	const allowed = ceiling?.allowedAgents?.length ? ceiling.allowedAgents.join(", ") : "(none)";
 	return `Capability ceiling from ${sources} does not allow agent '${agentName}'. Allowed agents: ${allowed}.`;
 }
