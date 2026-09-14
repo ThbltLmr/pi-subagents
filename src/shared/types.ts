@@ -804,6 +804,8 @@ export interface SteeringRecoveryDescriptor {
 	sourceRunId: string;
 	agentContract?: AgentContract;
 	agent: string;
+	/** Explicit user-facing title retained across async revival. */
+	label?: string;
 	sessionFile?: string;
 	/** Git ref used to allocate managed worktrees for this run. */
 	baseRef?: string;
@@ -1240,6 +1242,8 @@ export interface SingleResult {
 	workflowKey?: string;
 	agent: string;
 	task: string;
+	/** Explicit user-facing launch label, when supplied. */
+	label?: string;
 	/** Human-readable display name for the child's own session (agent + task
 	 *  excerpt), when the launcher derived one. Display metadata only. */
 	sessionName?: string;
@@ -2406,6 +2410,10 @@ export interface RunSyncOptions {
 	index?: number;
 	sessionDir?: string;
 	sessionFile?: string;
+	/** Explicit user-facing label for a direct launch. */
+	label?: string;
+	/** Explicit user-facing session title for a direct launch. */
+	sessionName?: string;
 	share?: boolean;
 	outputPath?: string;
 	outputClaimPath?: string;

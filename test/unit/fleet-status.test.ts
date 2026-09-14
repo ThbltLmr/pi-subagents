@@ -46,6 +46,21 @@ const theme = {
 };
 
 describe("below-editor subagent FleetView", () => {
+	it("projects direct spawn titles separately from control identities", () => {
+		const state = stateForTest();
+		state.foregroundControls.set("label-run", {
+			runId: "label-run", mode: "single", startedAt: 10, updatedAt: 20,
+			activeChildren: new Map([[0, { index: 0, agent: "__task__", sessionName: "Review auth", startedAt: 10, updatedAt: 20 }]]),
+		});
+		state.asyncJobs.set("label-async", {
+			asyncId: "label-async", asyncDir: "/tmp/label-async", mode: "single", status: "running", startedAt: 10,
+			steps: [{ agent: "__task__", label: "Check tests", sessionName: "Check tests", status: "running" }],
+		});
+		const entries = collectFleetStatusEntries(state);
+		assert.deepEqual(entries.map(entry => entry.displayLabel).sort(), ["Check tests", "Review auth"]);
+		assert.ok(entries.every(entry => entry.agent === "__task__"));
+	});
+
 	for (const source of ["workflow", "nested-run", "nested-step"] as const) {
 		it(`advances only running ${source} detail elapsed and freezes terminal evidence`, () => {
 			const cases = [

@@ -246,7 +246,7 @@ describe("supervisor ask registration", () => {
 				assert.equal(polling.scans.length, 0);
 				for (const mode of ["foreground", "workflow"] as const) {
 					const params = mode === "foreground"
-						? { agent: "leaf", task: "Inspect read-only and report progress.", async: false, output: false }
+						? { label: "Inspect read-only", agent: "leaf", task: "Inspect read-only and report progress.", async: false, output: false }
 						: { workflowScript: "return runs.run('inspect', { agent: 'leaf', task: 'Inspect read-only and report progress.', async: false, output: false });", async: false };
 					const result = await runtime.call("subagent", params);
 					assert.notEqual(result.isError, true, text(result));

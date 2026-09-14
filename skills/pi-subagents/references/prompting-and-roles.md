@@ -3,7 +3,7 @@
 The personal fork has no bundled roles. Assign work directly:
 
 ```js
-subagent({ task: "Review src/auth for concrete correctness bugs. Do not edit files." });
+subagent({ label: "Review auth", task: "Review src/auth for concrete correctness bugs. Do not edit files." });
 ```
 
 A fresh child receives the task, normal Pi instructions, applicable global/project context, and ordinary skill discovery—not the parent conversation. Supply any decisions, paths, or other context needed for the task. Explicit `context: "fork"` remains available with a usable parent session.

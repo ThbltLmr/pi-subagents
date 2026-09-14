@@ -578,6 +578,22 @@ test("static sequential and static parallel chain rendering keep logical labels"
 	assert.match(parallel, /Step 3\/3: writer task/);
 });
 
+test("direct single-child UI uses the explicit label without exposing the internal task identity", () => {
+	for (const expanded of [false, true]) {
+		for (const [agent, label] of [["__task__", "Auth review"], ["worker", "worker: Auth review"]] as const) {
+			const rendered = componentText(renderSubagentResult({
+				content: [{ type: "text", text: "done" }],
+				details: {
+					mode: "single",
+					results: [{ ...result(agent, "done"), task: "Review authentication", label, sessionName: label }],
+				},
+			}, { expanded }, theme as any));
+			assert.ok(rendered.includes(label));
+			assert.doesNotMatch(rendered, /__task__/);
+		}
+	}
+});
+
 test("expanded simple chain summaries strip repeated agent prefixes", () => {
 	const expanded = componentText(renderSubagentResult({
 		content: [{ type: "text", text: "done" }],

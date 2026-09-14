@@ -70,6 +70,7 @@ describe("slash subagent bridge requester context", () => {
           assert.equal(data.isError, false);
           assert.equal(executedParams.agent, "worker");
           assert.equal(executedParams.task, "work");
+          assert.equal(executedParams.label, "Work");
           assert.equal(executedParams.async, false);
           assert.equal(executedParams.output, true);
           assert.equal(executedParams.workflowScript, undefined);
@@ -80,7 +81,7 @@ describe("slash subagent bridge requester context", () => {
       });
     });
 
-    events.emit(REQUEST, { requestId: "structured-single", params: { agent: "worker", task: "work", async: false } });
+    events.emit(REQUEST, { requestId: "structured-single", params: { label: "Work", agent: "worker", task: "work", async: false } });
     await done;
   });
 

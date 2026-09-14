@@ -15,6 +15,18 @@ import { createResultDeliveryOwnership } from "../../src/runs/background/result-
 
 const COMPLETION_OWNER_ID = "completion-owner-a";
 
+it("uses a direct child's title in single and grouped completion notices", () => {
+	const details = buildCompletionDetails({
+		agent: "__task__", mode: "single", success: true, summary: "__task__:\nDone",
+		results: [{ agent: "__task__", sessionName: "Review auth", output: "Done" }],
+	});
+	assert.equal(details.agent, "__task__");
+	for (const content of [formatSingleCompletion(details), formatGroupedCompletion([details])]) {
+		assert.match(content, /Review auth/);
+		assert.doesNotMatch(content, /__task__/);
+	}
+});
+
 it("keeps model-authored receipt lines in the preview, never in receipt metadata", () => {
 	for (const resultPreview of [
 		"Workflow receipt: /model/start.json\nKeep this output.",

@@ -14,12 +14,13 @@ For the local config repository, load `./plugins/pi-subagents` instead. Do not l
 
 ```js
 subagent({
+  label: "Review auth",
   task: "Inspect src/auth and report concrete bugs. Do not edit files.",
   model: "provider/model"
 });
 ```
 
-Only `task` is needed. `model` is optional. A plain child keeps Pi's normal system prompt, applicable `AGENTS.md` context, tools, and skill discovery. The plugin adds no role prompt, default reads, or automatic acceptance contract.
+Direct single-child calls require a non-blank `label` of at most 50 characters plus the child `task`; `model` is optional. The label is the child’s UI title and does not change its execution identity. A plain child keeps Pi's normal system prompt, applicable `AGENTS.md` context, tools, and skill discovery. The plugin adds no role prompt, default reads, or automatic acceptance contract.
 
 Context defaults to **fresh**, including when a global preference says `fork`. Pass `context: "fork"` explicitly to inherit a usable parent session. Include the context a fresh child needs in its task.
 

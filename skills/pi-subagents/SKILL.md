@@ -5,13 +5,13 @@ description: Launch task-only Pi children, compose sequential or parallel workfl
 
 # Pi Subagents
 
-This fork ships no profiles. A direct launch needs only a non-empty task:
+This fork ships no profiles. A direct launch needs a concise UI label (non-blank, at most 50 characters) and a non-empty task:
 
 ```js
-subagent({ task: "Implement the agreed change and run the relevant tests" });
+subagent({ label: "Implement pagination", task: "Implement the agreed change and run the relevant tests" });
 ```
 
-Optional fields include `model`, `cwd`, `context`, `async`, `worktree`, and `output`. Plain children use fresh context and normal Pi instructions, applicable global/project context, tools, and skill discovery. Pass `context: "fork"` explicitly when parent-session context is needed and available.
+The label is display-only. Workflow steps keep their optional labels, and workflow container, management/control, and resume calls do not need a top-level label. Optional direct-launch fields include `model`, `cwd`, `context`, `async`, `worktree`, and `output`. Plain children use fresh context and normal Pi instructions, applicable global/project context, tools, and skill discovery. Pass `context: "fork"` explicitly when parent-session context is needed and available.
 
 `agent` selects an explicitly configured custom profile. Do not invent profile names or assume `worker`, `reviewer`, `oracle`, or any external CLI profile exists. Model selection and whether to delegate belong to the user and project instructions, not a package role policy.
 

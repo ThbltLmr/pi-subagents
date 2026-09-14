@@ -2541,7 +2541,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		})], { modelResponseAliases: { "databricks-bedrock/ias-claude-opus-5": ["claude-opus-5"] } });
 		const result = await executor.executePublic(
 			"foreground-response-alias-fallback",
-			{ agent: "echo", task: "Say hello", async: false, context: "fresh", acceptance: false },
+			{ label: "Say hello", agent: "echo", task: "Say hello", async: false, context: "fresh", acceptance: false },
 			new AbortController().signal,
 			undefined,
 			{

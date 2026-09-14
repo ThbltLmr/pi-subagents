@@ -1,6 +1,8 @@
 import { TASK_AGENT_NAME } from "../agents/task-agent.ts";
 import { normalizeWorktreeBaseRef } from "../runs/shared/worktree.ts";
 
+export const DIRECT_SPAWN_LABEL_MAX_CHARS = 50;
+
 export interface PublicSubagentExecutionParams {
 	action?: unknown;
 	capabilities?: unknown;
@@ -9,6 +11,7 @@ export interface PublicSubagentExecutionParams {
 	planId?: unknown;
 	agent?: unknown;
 	task?: unknown;
+	label?: unknown;
 	handoffPath?: unknown;
 	laneId?: unknown;
 	merge?: unknown;
@@ -68,6 +71,9 @@ export function validateWorkflowCapacityOverrides(params: PublicSubagentExecutio
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
 export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T): PublicSubagentExecutionNormalization<T> {
+	if (Object.hasOwn(params, "directSpawnLabel")) {
+		return { ok: false, error: "directSpawnLabel is internal; use label for direct spawns.", mode: params.action === undefined ? "workflow" : "management" };
+	}
 	for (const field of ["resource", "resourceProvenance", "workflowResource", "workflowResourceProvenance", "workflowResourcePermit", "resourcePermit", "permit"] as const) {
 		if (Object.hasOwn(params, field) && (params as Record<string, unknown>)[field] !== undefined) {
 			return { ok: false, error: "Public execution does not accept workflow resource provenance or permit fields.", mode: params.action === undefined ? "workflow" : "management" };
@@ -204,6 +210,13 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		return { ok: false, error: "Structured single-child execution cannot be combined with workflow, workflowScript, or workflowScriptPath.", mode: "workflow" };
 	}
 	if (params.agent !== undefined || params.task !== undefined) {
+		if (typeof params.label !== "string" || !params.label.trim()) {
+			return { ok: false, error: `Direct single-child spawning requires a non-blank label (maximum ${DIRECT_SPAWN_LABEL_MAX_CHARS} characters).`, mode: "workflow" };
+		}
+		const label = params.label.trim();
+		if (params.label.length > DIRECT_SPAWN_LABEL_MAX_CHARS) {
+			return { ok: false, error: `Direct single-child label must be at most ${DIRECT_SPAWN_LABEL_MAX_CHARS} characters.`, mode: "workflow" };
+		}
 		if (typeof params.agent === "string" && params.agent.trim() === TASK_AGENT_NAME) {
 			return { ok: false, error: "The internal task identity is not a profile. Omit agent and provide a non-empty task.", mode: "workflow" };
 		}
@@ -220,6 +233,7 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 			ok: true,
 			params: {
 				...params,
+				label,
 				...(typeof params.agent === "string" ? { agent: params.agent.trim() } : {}),
 				output: params.output === undefined ? true : params.output,
 			} as T,

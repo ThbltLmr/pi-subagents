@@ -130,7 +130,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const missing = await executor.executePublic(
 			"invalid-foreground-cwd",
-			{ agent: "echo", task: "Do not spawn", async: false, cwd: requestedCwd },
+			{ label: "Validate cwd", agent: "echo", task: "Do not spawn", async: false, cwd: requestedCwd },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -143,7 +143,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		fs.writeFileSync(fileCwd, "file");
 		const notDirectory = await executor.executePublic(
 			"invalid-foreground-file-cwd",
-			{ agent: "echo", task: "Do not spawn", async: false, cwd: fileCwd },
+			{ label: "Validate cwd", agent: "echo", task: "Do not spawn", async: false, cwd: fileCwd },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -161,7 +161,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.executePublic(
 			"invalid-async-cwd",
-			{ agent: "echo", task: "Do not spawn", async: true, cwd: requestedCwd },
+			{ label: "Validate async cwd", agent: "echo", task: "Do not spawn", async: true, cwd: requestedCwd },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -179,7 +179,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.executePublic(
 			"structured-single",
-			{ agent: "echo", task: "Run through workflow", async: false, context: "fresh" },
+			{ label: "Run structured child", agent: "echo", task: "Run through workflow", async: false, context: "fresh" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -206,7 +206,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.executePublic(
 			"structured-single-tool-backfill",
-			{ agent: "bash-worker", task: "Run exactly one tool: bash with command echo PROBE_OK.", async: false, toolTimeoutMs: 100, timeoutMs: 5_000 },
+			{ label: "Run probe", agent: "bash-worker", task: "Run exactly one tool: bash with command echo PROBE_OK.", async: false, toolTimeoutMs: 100, timeoutMs: 5_000 },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -223,7 +223,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 		const result = await executor.executePublic(
 			"structured-single-foreground-default",
-			{ agent: "echo", task: "Run through workflow" },
+			{ label: "Run structured child", agent: "echo", task: "Run through workflow" },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -236,8 +236,8 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 
 	it("does not override structured single output unless configured by the agent", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		for (const params of [
-			{ agent: "echo", task: "Use the task output path", async: false },
-			{ agent: "echo", task: "Disable file output", output: false, async: false },
+			{ label: "Use task output", agent: "echo", task: "Use the task output path", async: false },
+			{ label: "Disable file output", agent: "echo", task: "Disable file output", output: false, async: false },
 		] as const) {
 			mockPi.onCall({ output: "Structured child completed" });
 			const result = await makeExecutor([makeAgent("echo")]).executePublic(
@@ -256,7 +256,7 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		const configuredPath = path.join(tempDir, "agent-report.md");
 		const configured = await makeExecutor([makeAgent("echo", { output: configuredPath })]).executePublic(
 			"structured-single-agent-output",
-			{ agent: "echo", task: "Use agent output", async: false },
+			{ label: "Use agent output", agent: "echo", task: "Use agent output", async: false },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),

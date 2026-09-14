@@ -9,43 +9,48 @@ describe("public subagent execution normalization", () => {
 		assert.deepEqual(normalizePublicSubagentExecution({ workflowScript: "return 1", preflight: { version: 1, lanes: [] } }), { ok: true, params: { workflowScript: "return 1", preflight: { version: 1, lanes: [] } } });
 		assert.deepEqual(normalizePublicSubagentExecution({ workflowScriptPath: "workflows/review.js", globalConcurrencyLimit: 2 }), { ok: true, params: { workflowScriptPath: "workflows/review.js", globalConcurrencyLimit: 2 } });
 		const task = "Use `quotes`\nand newlines";
-		assert.deepEqual(normalizePublicSubagentExecution({ agent: " worker ", task, context: "fresh", async: false }), {
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: " worker ", task, label: " Auth review ", context: "fresh", async: false }), {
 			ok: true,
 			params: {
 				agent: "worker",
 				task,
+				label: "Auth review",
 				context: "fresh",
 				async: false,
 				output: true,
 			},
 		});
-		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker" }), {
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", label: "Worker" }), {
 			ok: true,
 			params: {
 				agent: "worker",
+				label: "Worker",
 				output: true,
 			},
 		});
-		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", async: true, baseRef: "@/foo" }), {
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", label: "Worker", async: true, baseRef: "@/foo" }), {
 			ok: true,
 			params: {
 				agent: "worker",
+				label: "Worker",
 				async: true,
 				baseRef: "@/foo",
 				output: true,
 			},
 		});
-		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", output: false }), {
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", label: "Worker", output: false }), {
 			ok: true,
 			params: {
 				agent: "worker",
+				label: "Worker",
 				output: false,
 			},
 		});
-		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", isolation: "none" }), {
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", label: "Worker", isolation: "none" }), {
 			ok: true,
 			params: {
 				agent: "worker",
+				label: "Worker",
 				worktree: false,
 				output: true,
 			},

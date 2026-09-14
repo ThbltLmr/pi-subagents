@@ -246,6 +246,7 @@ export interface SubagentRunConfig {
 
 interface StepResult {
 	agent: string;
+	label?: string;
 	/** Human-readable display name for the child session, when derived at launch. */
 	sessionName?: string;
 	context?: "fresh" | "fork";
@@ -1593,6 +1594,7 @@ export async function runSingleStepInner(
 
 	const result: StepResult & { completionGuardTriggered?: boolean } = omitUndefinedProperties({
 		agent: step.agent,
+		...(step.label ? { label: step.label } : {}),
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		context: step.context,
 		...(step.agentContract ? { agentContract: step.agentContract } : {}),
@@ -3781,6 +3783,7 @@ export async function runSubagent(
 			for (const pr of parallelResults) {
 				results.push(omitUndefinedProperties({
 					agent: pr.agent,
+					...(pr.label ? { label: pr.label } : {}),
 					...(pr.sessionName ? { sessionName: pr.sessionName } : {}),
 					context: pr.context,
 					agentContract: pr.agentContract,
@@ -4541,6 +4544,7 @@ export async function runSubagent(
 			const childStopped = singleResult.stopped === true;
 			results.push(omitUndefinedProperties({
 				agent: singleResult.agent,
+				...(singleResult.label ? { label: singleResult.label } : {}),
 				...(singleResult.sessionName ? { sessionName: singleResult.sessionName } : {}),
 				context: singleResult.context,
 				agentContract: singleResult.agentContract,
@@ -4914,6 +4918,7 @@ export async function runSubagent(
 			...(stopped ? { stopped: true, error: stopMessage } : timedOut ? { timedOut: true, error: timeoutMessage ?? "Subagent timed out." } : usageBudgetExceeded ? { error: statusPayload.error ?? "Usage budget exhausted." } : {}),
 			results: results.map((r) => omitUndefinedProperties({
 				agent: r.agent,
+				...(r.label ? { label: r.label } : {}),
 				...(r.sessionName ? { sessionName: r.sessionName } : {}),
 				context: r.context,
 				output: r.output,

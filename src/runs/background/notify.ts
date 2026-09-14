@@ -37,6 +37,7 @@ export type SubagentNotifyWatchdogBlocker = Pick<ChildWatchdogWarningSummary, "s
 export interface SubagentNotifyDetails {
 	workflowReceiptPath?: string;
 	agent: string;
+	displayLabel?: string;
 	status: "completed" | "failed" | "paused" | "stopped";
 	source?: "async" | "foreground";
 	taskInfo?: string;
@@ -85,6 +86,7 @@ export interface CompletionNotification {
 		runId?: string;
 		workflowKey?: string;
 		agent?: string;
+		sessionName?: string;
 		status?: string;
 		state?: string;
 		success?: boolean;
@@ -300,7 +302,7 @@ export function formatSingleCompletion(details: SubagentNotifyDetails): string {
 		? `Scheduled run from **${details.scheduleOrigin.name ?? details.scheduleOrigin.id}** (schedule ${details.scheduleOrigin.id}).`
 		: undefined;
 	return [
-		`${taskKind} ${details.status}: **${details.agent}**${details.taskInfo ?? ""}`,
+		`${taskKind} ${details.status}: **${details.displayLabel ?? details.agent}**${details.taskInfo ?? ""}`,
 		details.workflowReceiptPath ? `Workflow receipt: ${details.workflowReceiptPath}` : undefined,
 		"",
 		scheduleLine,
@@ -414,13 +416,13 @@ export function parseSubagentNotifyContent(content: string): SubagentNotifyDetai
 }
 
 export function formatGroupedCompletion(details: SubagentNotifyDetails[]): string {
-	const header = `Background tasks completed (${details.length}): ${details.map((d) => `**${d.agent}**${d.taskInfo ?? ""}`).join(", ")}`;
+	const header = `Background tasks completed (${details.length}): ${details.map((d) => `**${d.displayLabel ?? d.agent}**${d.taskInfo ?? ""}`).join(", ")}`;
 	const blocks: string[] = [header, ""];
 	for (let index = 0; index < details.length; index++) {
 		const detail = details[index];
 		if (!detail) continue;
 		const sessionLine = formatSessionLine(detail);
-		blocks.push(`${index + 1}. ${detail.agent}${detail.taskInfo ?? ""}${detail.scheduleOrigin ? ` — scheduled run from ${detail.scheduleOrigin.name ?? detail.scheduleOrigin.id} (schedule ${detail.scheduleOrigin.id})` : ""}`);
+		blocks.push(`${index + 1}. ${detail.displayLabel ?? detail.agent}${detail.taskInfo ?? ""}${detail.scheduleOrigin ? ` — scheduled run from ${detail.scheduleOrigin.name ?? detail.scheduleOrigin.id} (schedule ${detail.scheduleOrigin.id})` : ""}`);
 		if (detail.workflowReceiptPath) blocks.push(`Workflow receipt: ${detail.workflowReceiptPath}`);
 		blocks.push(formatResultPreview(detail));
 		blocks.push(...formatWatchdogBlockerLines(detail));
@@ -524,6 +526,7 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 	const rawRunId = typeof result.runId === "string" ? result.runId : typeof result.id === "string" ? result.id : undefined;
 	const workflowRunId = (result.mode === "workflow" || agent === "workflow") && rawRunId ? rawRunId : undefined;
 	const directChild = !workflowRunId && result.results?.length === 1 ? result.results[0]! : undefined;
+	const displayLabel = directChild?.sessionName?.trim();
 	const directStructuredPreview = directChild
 		? childInlinePreview(directChild).preview
 		: undefined;
@@ -541,7 +544,9 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 		|| (directAgent && directSummary === `${directAgent}:\n(no output)`));
 	const resultPreview = directStructuredPreview && (directNoOutputSummary || directDegenerateSummary)
 		? `Structured output:\n${directStructuredPreview}`
-		: summary;
+		: displayLabel && directAgent && summary.trimStart().startsWith(`${directAgent}:\n`)
+			? `${displayLabel}:\n${directSummaryBody}`
+			: summary;
 	const childRuns = result.results?.flatMap((child) => {
 		const runId = typeof child.runId === "string" && child.runId.trim() ? child.runId.trim() : undefined;
 		const workflowKey = typeof child.workflowKey === "string" && child.workflowKey.trim() ? child.workflowKey.trim() : undefined;
@@ -595,6 +600,7 @@ export function buildCompletionDetails(result: CompletionNotification): Subagent
 		: undefined;
 	return {
 		agent,
+		...(displayLabel ? { displayLabel } : {}),
 		status,
 		...(scheduleOrigin ? { scheduleOrigin } : {}),
 		...(workflowReceiptPath ? { workflowReceiptPath } : {}),

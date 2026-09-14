@@ -689,10 +689,12 @@ function foregroundResultDisplayName(
 }
 
 function foregroundSingleDisplayName(result: Details["results"][number] | undefined): string {
-	return normalizedParallelDisplayText(result?.agent)
-		?? normalizedParallelDisplayText(result?.sessionName)
-		?? compactTaskText(result?.task)
-		?? "subagent";
+	const label = normalizedParallelDisplayText(result?.label);
+	if (label) return label;
+	const agent = normalizedParallelDisplayText(result?.agent);
+	const sessionName = normalizedParallelDisplayText(result?.sessionName);
+	if (sessionName && (!agent || !sessionName.toLowerCase().startsWith(`${agent.toLowerCase()}: `))) return sessionName;
+	return agent ?? sessionName ?? compactTaskText(result?.task) ?? "subagent";
 }
 
 function hasLiveOutputSignal(line: string): boolean {
@@ -1142,7 +1144,11 @@ function isCompletedWidgetStepStatus(status: AsyncJobStep["status"]): boolean {
 }
 
 function singleChildAgentName(job: AsyncJobState, step: AsyncJobStep): string {
-	return job.agents?.length === 1 ? job.agents[0]! : step.agent || widgetJobName(job);
+	if (step.label?.trim()) return step.label.trim();
+	const agent = step.agent?.trim();
+	const sessionName = step.sessionName?.trim();
+	if (sessionName && (!agent || !sessionName.toLowerCase().startsWith(`${agent.toLowerCase()}: `))) return sessionName;
+	return job.agents?.length === 1 ? job.agents[0]! : agent || widgetJobName(job);
 }
 
 function hasSingleChildDetailEvidence(job: AsyncJobState, step: AsyncJobStep): boolean {

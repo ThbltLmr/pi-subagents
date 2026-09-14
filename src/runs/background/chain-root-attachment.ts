@@ -13,6 +13,7 @@ export interface ImportedAsyncRoot {
 
 export interface ImportedAsyncRootResult {
 	agent: string;
+	label?: string;
 	/** Human-readable display name for the child session, when derived at launch. */
 	sessionName?: string;
 	output: string;
@@ -51,6 +52,7 @@ interface AsyncResultFile {
 	stopped?: boolean;
 	results?: Array<{
 		agent?: string;
+		label?: string;
 		sessionName?: string;
 		output?: string;
 		error?: string;
@@ -222,6 +224,7 @@ function buildImportedResult(root: ImportedAsyncRoot, status: AsyncStatus | null
 		...(error ? { error } : {}),
 		...(timedOut ? { timedOut: true } : {}),
 		...(stopped ? { stopped: true } : {}),
+		...(child?.label ?? step?.label ? { label: child?.label ?? step?.label } : {}),
 		...(child?.sessionName ?? step?.sessionName ? { sessionName: child?.sessionName ?? step?.sessionName } : {}),
 		...(child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile ? { sessionFile: child?.sessionFile ?? step?.sessionFile ?? status?.sessionFile } : {}),
 		...(child?.intercomTarget ? { intercomTarget: child.intercomTarget } : {}),

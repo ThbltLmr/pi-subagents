@@ -323,7 +323,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
-		"launchResolvedExtensions", "runFanoutBudget", "lane", "baseRef",
+		"launchResolvedExtensions", "runFanoutBudget", "lane", "baseRef", "label",
 		"extensionBindings",
 	]);
 	for (const field of Object.keys(parsed)) {
@@ -332,6 +332,9 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	const requiredStrings = ["sourceRunId", "agent", "cwd", "systemPromptMode", "outputMode"] as const;
 	for (const field of requiredStrings) {
 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
+	}
+	if (parsed.label !== undefined && (typeof parsed.label !== "string" || !parsed.label.trim() || parsed.label !== parsed.label.trim() || parsed.label.length > 50)) {
+		throw new Error(`Invalid async recovery descriptor '${descriptorPath}': label must be trimmed, non-blank text of at most 50 characters.`);
 	}
 	if (parsed.version !== 1) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 1.`);
 	try {

@@ -45,11 +45,12 @@ describe("async chain root attachment", () => {
 		writeJson(importedRoot.resultPath, {
 			state: "complete",
 			success: true,
-		results: [{ agent: "worker", output: "root output", success: true, sessionFile, usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.001, turns: 1 } }],
+		results: [{ agent: "worker", label: "Review auth", output: "root output", success: true, sessionFile, usage: { input: 100, output: 50, cacheRead: 0, cacheWrite: 0, cost: 0.001, turns: 1 } }],
 		});
 
 		const result = await waitForImportedAsyncRoot(importedRoot, { pollIntervalMs: 1 });
 
+		assert.equal(result.label, "Review auth");
 		assert.deepEqual({
 			agent: result.agent,
 			output: result.output,

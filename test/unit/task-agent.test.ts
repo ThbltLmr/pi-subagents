@@ -17,19 +17,39 @@ it("builds a plain Pi child without a persona, tool allowlist, or inferred accep
 	assert.equal(agent.defaultProgress, undefined);
 });
 
-it("accepts task-only public calls without manufacturing a public profile", () => {
-	assert.deepEqual(normalizePublicSubagentExecution({ task: "Inspect the parser" }), {
-		ok: true, params: { task: "Inspect the parser", output: true },
+it("accepts labeled task-only public calls without manufacturing a public profile", () => {
+	assert.deepEqual(normalizePublicSubagentExecution({ task: "Inspect the parser", label: " Parser review " }), {
+		ok: true, params: { task: "Inspect the parser", label: "Parser review", output: true },
 	});
-	for (const task of ["", "  ", false, 2, null]) assert.equal(normalizePublicSubagentExecution({ task }).ok, false);
-	for (const agent of ["", "  ", false, 2, null]) assert.equal(normalizePublicSubagentExecution({ task: "Inspect", agent }).ok, false);
+	for (const task of ["", "  ", false, 2, null]) assert.equal(normalizePublicSubagentExecution({ task, label: "Parser review" }).ok, false);
+	for (const agent of ["", "  ", false, 2, null]) assert.equal(normalizePublicSubagentExecution({ task: "Inspect", agent, label: "Parser review" }).ok, false);
+});
+
+it("requires a non-blank direct-spawn label capped at 50 characters", () => {
+	for (const label of [undefined, "", "   ", false, 2, null]) {
+		const result = normalizePublicSubagentExecution({ task: "Inspect", label });
+		assert.equal(result.ok, false, String(label));
+		if (!result.ok) assert.match(result.error, /label/);
+	}
+	assert.equal(normalizePublicSubagentExecution({ agent: "worker" }).ok, false, "named direct spawn also requires label");
+	const fifty = "x".repeat(50);
+	assert.equal(normalizePublicSubagentExecution({ task: "Inspect", label: fifty }).ok, true);
+	assert.equal(normalizePublicSubagentExecution({ agent: "worker", label: fifty }).ok, true);
+	assert.equal(normalizePublicSubagentExecution({ task: "Inspect", label: ` ${fifty}` }).ok, false);
+	assert.equal(normalizePublicSubagentExecution({ task: "Inspect", label: "Inspect", directSpawnLabel: "Forged" }).ok, false);
+	const tooLong = normalizePublicSubagentExecution({ task: "Inspect", label: "x".repeat(51) });
+	assert.equal(tooLong.ok, false);
+	if (!tooLong.ok) assert.match(tooLong.error, /at most 50/);
+	// Workflow containers and management/control calls do not need a top-level label.
+	assert.equal(normalizePublicSubagentExecution({ workflowScript: "return 1" }).ok, true);
+	assert.equal(normalizePublicSubagentExecution({ action: "status" }).ok, true);
 });
 
 it("normalizes new task launches but preserves explicit profiles, context, management, and resume", () => {
 	assert.deepEqual(normalizeTaskSpawn({ task: "Inspect", context: "fork" }), { task: "Inspect", context: "fork", agent: TASK_AGENT_NAME });
 	assert.deepEqual(normalizeTaskSpawn({ task: "Inspect" }), { task: "Inspect", context: "fresh", agent: TASK_AGENT_NAME });
 	assert.throws(() => normalizeTaskSpawn({ task: "Inspect", context: "profile" }), /explicit custom/);
-	assert.equal(normalizePublicSubagentExecution({ agent: TASK_AGENT_NAME, task: "Inspect" }).ok, false);
+	assert.equal(normalizePublicSubagentExecution({ agent: TASK_AGENT_NAME, task: "Inspect", label: "Inspect" }).ok, false);
 	for (const params of [
 		{ agent: "custom", task: "Inspect" }, { action: "list" }, { action: "resume", message: "Continue" },
 		{ workflowScript: "return 1" }, { workflowScriptPath: "workflow.js" }, { workflow: "review" },

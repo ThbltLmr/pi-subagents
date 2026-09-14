@@ -791,8 +791,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 					0,
 				);
 			const asyncLabel = args.async === true ? `${gap}${theme.fg("warning", "[async]")}` : "";
+			const spawnTitle = args.label?.trim() || args.agent || "?";
 			return new Text(
-				`${title}${gap}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${title}${gap}${theme.fg("accent", spawnTitle)}${asyncLabel}`,
 				0,
 				0,
 			);

@@ -106,6 +106,29 @@ const markdownTheme: MarkdownTheme = {
 };
 
 describe("native subagent fleet", () => {
+	it("renders direct spawn titles while retaining machine identities", () => {
+		const state = stateForTest();
+		state.foregroundControls.set("label-run", {
+			runId: "label-run", sessionId: "session-current", mode: "single", startedAt: 10, updatedAt: 20,
+			activeChildren: new Map([[0, { index: 0, agent: "__task__", sessionName: "Review auth", startedAt: 10, updatedAt: 20 }]]),
+		});
+		state.asyncJobs.set("label-async", {
+			asyncId: "label-async", asyncDir: "/tmp/label-async", sessionId: "session-current", mode: "single", status: "running", startedAt: 10,
+			steps: [{ agent: "__task__", label: "Check tests", sessionName: "Check tests", status: "running" }],
+		});
+		const component = new SubagentFleetComponent(
+			{ terminal: { rows: 28, columns: 100 }, requestRender() {} } as never,
+			theme as never, state, () => {}, { refreshMs: 60_000, markdownTheme },
+		);
+		try {
+			const rendered = component.render(100).join("\n");
+			assert.match(rendered, /Review auth/);
+			assert.match(rendered, /Check tests/);
+			assert.doesNotMatch(rendered, /__task__/);
+			assert.equal(state.foregroundControls.get("label-run")?.activeChildren?.get(0)?.agent, "__task__");
+		} finally { component.dispose(); }
+	});
+
 	it("rewrites an authored prompt from guidance without persistence", async () => {
 		const calls: unknown[] = [];
 		const streamFn = (_model: never, context: unknown) => {

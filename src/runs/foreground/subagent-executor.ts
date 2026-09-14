@@ -322,6 +322,10 @@ export interface SubagentParamsLike {
 	type?: string;
 	agent?: string;
 	task?: string;
+	/** Required user-facing title on public direct single-child launches. */
+	label?: string;
+	/** Internal copy proving label came through the public direct-spawn boundary. */
+	directSpawnLabel?: string;
 	capabilities?: boolean;
 	extensionBindings?: ExtensionBindings;
 	/** Retained async child run id. Valid only on workflow runs.run items. */
@@ -2068,6 +2072,7 @@ async function resumeAsyncRun(input: {
 	const revivalAsyncDir = path.join(DIRS.async, runId);
 	const result = executeAsyncSingle(runId, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 		agent: target.agent,
+		label: recoveryDescriptor?.label,
 		task: buildRevivedAsyncTask(target as Parameters<typeof buildRevivedAsyncTask>[0], effectiveFollowUp),
 		goal: effectiveFollowUp,
 		agentConfig,
@@ -3278,6 +3283,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		if (launchRuleError) return toExecutionErrorResult(params, new Error(launchRuleError), data.contextPolicy.contextSummary);
 		const asyncResult = executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
+			label: params.directSpawnLabel,
 			task: shouldForkAgent(contextPolicy, params.agent!) ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			goal: params.task ?? "",
 			agentConfig: a,
@@ -3843,12 +3849,13 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		beginForegroundChild(foregroundControl, omitUndefinedProperties({
 			index: 0,
 			agent: params.agent!,
+			sessionName: params.directSpawnLabel,
+			description: params.directSpawnLabel ?? foregroundControl.description,
 			authoredTask,
 			effectivePrompt: task,
 			cwd: singleCwd,
 			outputPath,
 			rerun: { params: { ...params, task: authoredTask, async: params.async ?? false } },
-			description: foregroundControl.description,
 			...(modelOverride ? { model: modelOverride } : {}),
 			...(thinking ? { thinking } : {}),
 			interrupt: () => {
@@ -3900,6 +3907,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			onChildSession: (controls) => { childSessionControls = controls; },
 			context: data.contextPolicy.contextForAgent(params.agent!),
 			unknownAgentDiagnosticContext: data.unknownAgentDiagnosticContext,
+			label: params.directSpawnLabel,
+			sessionName: params.directSpawnLabel,
 			runFanoutBudget: params.runFanoutAdmitted ? data.runFanoutBudget : { ...data.runFanoutBudget, parentPath: `${data.runFanoutBudget.parentPath ? `${data.runFanoutBudget.parentPath}/` : ""}single` },
 			cwd: singleCwd,
 			requestedCwd: data.requestedCwd,
@@ -3985,7 +3994,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 						}
 					}
 				}
-				recordRun(params.agent!, cleanTask, result.exitCode, result.progressSummary?.durationMs ?? 0, result);
+				recordRun(params.agent!, cleanTask, result.exitCode, result.progressSummary?.durationMs ?? 0, { ...result, label: params.directSpawnLabel });
 			},
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
@@ -4010,7 +4019,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		}
 	}
 	if (!r.detached) {
-		recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0, r);
+		recordRun(params.agent!, cleanTask, r.exitCode, r.progressSummary?.durationMs ?? 0, { ...r, label: params.directSpawnLabel });
 	}
 
 	let worktreeHandoff: Awaited<ReturnType<typeof finalizeSingleWorktreeHandoff>> | undefined;
@@ -7173,7 +7182,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (workflowLaunchObserver) {
 				const singleTask = hasTasks && effectiveParams.tasks?.length === 1 ? effectiveParams.tasks[0] : undefined;
 				const singleSessionName = hasSingle
-					? deriveChildSessionName({ agent: effectiveParams.agent!, task: effectiveParams.task })
+					? effectiveParams.directSpawnLabel ?? deriveChildSessionName({ agent: effectiveParams.agent!, task: effectiveParams.task })
 					: singleTask
 						? deriveChildSessionName({ agent: singleTask.agent, task: singleTask.task })
 						: undefined;
@@ -7258,6 +7267,9 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			return Promise.resolve({ content: [{ type: "text", text: normalized.error }], isError: true, details: { mode: normalized.mode, results: [] } });
 		}
 		let publicParams = normalized.params as SubagentParamsLike;
+		if ((publicParams.agent !== undefined || publicParams.task !== undefined) && publicParams.label) {
+			publicParams = { ...publicParams, directSpawnLabel: publicParams.label };
+		}
 		if (publicParams.workflow !== undefined) {
 			const resolved = resolveWorkflowResource(publicParams.workflow, publicParams.args, ctx.sessionManager.getSessionId() ?? undefined);
 			if (!resolved.ok) return Promise.resolve({ content: [{ type: "text", text: resolved.error }], isError: true, details: { mode: "workflow", results: [] } });

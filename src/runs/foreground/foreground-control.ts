@@ -4,6 +4,7 @@ import { registerLivePromptAudit, removeLivePromptAudit, type PromptAuditRerunCo
 interface BeginForegroundChildInput {
 	index: number;
 	agent: string;
+	sessionName?: string;
 	description?: string;
 	authoredTask: string;
 	effectivePrompt: string;
@@ -103,6 +104,7 @@ export function beginForegroundChild(control: ForegroundRunControl, input: Begin
 	const child: ForegroundChildControl = {
 		index: input.index,
 		agent: input.agent,
+		...(input.sessionName ? { sessionName: input.sessionName } : {}),
 		...(input.description ? { description: input.description } : {}),
 		startedAt: now,
 		updatedAt: now,

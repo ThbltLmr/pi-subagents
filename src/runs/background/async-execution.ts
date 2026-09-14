@@ -217,6 +217,8 @@ interface AsyncChainParams {
 
 interface AsyncSingleParams {
 	agent: string;
+	/** Explicit user-facing title for a direct single-child launch. */
+	label?: string;
 	task?: string;
 	/** Raw caller-facing goal used only by the started event. */
 	goal?: string;
@@ -1818,6 +1820,7 @@ export function executeAsyncSingle(
 		...(ctx.modelResponseAliases ? { modelResponseAliases: ctx.modelResponseAliases } : {}),
 		version: 1,
 		...(lane ? { lane } : {}),
+		...(params.label ? { label: params.label } : {}),
 		launchContractDigest,
 		...(extensionBindings ? { extensionBindings } : {}),
 		runFanoutBudget,
@@ -1890,6 +1893,7 @@ export function executeAsyncSingle(
 						permissionRules,
 						...(capabilityCeiling ? { capabilityCeiling } : {}),
 						agent,
+						...(params.label ? { label: params.label, sessionName: params.label } : {}),
 						task: taskText,
 						...(agentConfig.runner ? { runner: agentConfig.runner } : {}),
 						...(params.externalJobFollowUp ? { externalJobFollowUp: params.externalJobFollowUp } : {}),
@@ -2089,7 +2093,7 @@ export function executeAsyncSingle(
 	}
 
 	return {
-		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${agent} [${id}]`, ctx.interactive === true) }],
+		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${params.label ?? agent} [${id}]`, ctx.interactive === true) }],
 		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
 	};
 }

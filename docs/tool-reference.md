@@ -92,6 +92,7 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 |-------|------|---------|-------------|
 | `agent` | string | omitted | Optional custom profile or management target. Omit it for a plain task-only child. No profiles are bundled. |
 | `task` | string | profile default | Direct child's task; required and non-empty without a profile. Excludes `action` and workflow inputs. |
+| `label` | string (1–50 chars) | required for direct spawn | Non-blank UI title for a direct single-child tool launch, whether task-only or profile-backed. Display-only; it does not replace the internal execution identity. Not required on workflow containers, workflow steps, management/control, or resume calls. |
 | `action` | string | - | Offline workflow `validate`, agent management (including `guide`, `children.list`, and `refine`/`refine.show`/`refine.rollback`), lane evidence (`lane.status`, `lane.recordMerge`, `lane.recordSupersession`), mission (`mission.create/list/show/update/resolve-decision/attach-run/close`), Inspect actions (`inspector.command/open/status/close`), Herdr project pane (`project.open/status/close`), status/control, plan-only `worktree.cleanup`, schedule, watchdog, or doctor action. |
 | `topic` | `overview \| workflows \| agents \| missions \| observability \| tool-reference \| configuration \| models \| watchdog \| extension-api` | `overview` | Packaged guide topic for `action: "guide"`. |
 | `config` | object/string | - | Agent config for management create/update. |

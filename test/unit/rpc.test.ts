@@ -642,10 +642,11 @@ describe("subagent extension RPC bridge", () => {
 			},
 		});
 
-		const reply = await request(events, "spawn-structured", "spawn", { agent: "worker", task: "Do work" });
+		const reply = await request(events, "spawn-structured", "spawn", { label: "Do work", agent: "worker", task: "Do work" });
 		assert.equal(reply.success, true);
 		assert.equal(executedParams.agent, "worker");
 		assert.equal(executedParams.task, "Do work");
+		assert.equal(executedParams.label, "Do work");
 		assert.equal(executedParams.async, true);
 		assert.equal(executedParams.output, true);
 		assert.equal(executedParams.workflowScript, undefined);
@@ -664,7 +665,7 @@ describe("subagent extension RPC bridge", () => {
 			},
 		});
 
-		const foreground = await request(events, "spawn-foreground", "spawn", { agent: "worker", task: "Do work", async: false });
+		const foreground = await request(events, "spawn-foreground", "spawn", { label: "Do work", agent: "worker", task: "Do work", async: false });
 		const management = await request(events, "spawn-management", "spawn", { action: "list" });
 
 		assert.equal(foreground.success, false);

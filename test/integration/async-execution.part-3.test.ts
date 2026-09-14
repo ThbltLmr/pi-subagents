@@ -1287,7 +1287,7 @@ export default function() {
 		retainedCtx.model = { provider: "deepseek", id: "scheduled-model" };
 		const launch = await executor.executeScheduled(
 			`scheduled-owner-${Date.now().toString(36)}`,
-			{ agent: "worker", task: "Run retained project timer", async: true, acceptance: false },
+			{ label: "Run retained timer", agent: "worker", task: "Run retained project timer", async: true, acceptance: false },
 			new AbortController().signal,
 			retainedCtx,
 		) as AsyncExecutionResult;
@@ -1300,7 +1300,7 @@ export default function() {
 		assert.deepEqual(state.subagentSpawns, { sessionId: "session-b", count: 1, configuredLimit: 1, granted: 1, grantHistory: [] });
 		const blocked = await executor.executeScheduled(
 			`scheduled-owner-blocked-${Date.now().toString(36)}`,
-			{ agent: "worker", task: "Exceed the retained owner budget", async: true, acceptance: false },
+			{ label: "Exceed owner budget", agent: "worker", task: "Exceed the retained owner budget", async: true, acceptance: false },
 			new AbortController().signal,
 			retainedCtx,
 		);
@@ -1338,7 +1338,7 @@ export default function() {
 
 		const launch = await executor.executeScheduled(
 			`scheduled-owner-no-model-${Date.now().toString(36)}`,
-			{ agent: "worker", task: "Run owner without model", async: true, acceptance: false },
+			{ label: "Run owner without model", agent: "worker", task: "Run owner without model", async: true, acceptance: false },
 			new AbortController().signal,
 			retainedCtx,
 		) as AsyncExecutionResult;

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { createEventBus, makeMinimalCtx } from "../support/helpers.ts";
+import { readAsyncRecoveryDescriptor } from "../../src/runs/background/async-resume.ts";
 import { installAsyncExecutionHooks, available, createSubagentExecutor, mockPi, tempDir, readAsyncPayload } from "../support/async-execution-fixture.ts";
 
 function executor() {
@@ -26,13 +27,20 @@ describe("task-only execution without configured profiles", { skip: !available }
 		it(`spawns a plain child with fresh context (async=${async})`, async () => {
 			mockPi.onCall({ output: "Done" });
 			const result = await executor().executePublic(`task-only-${async}`, {
-				task: "Return a short greeting", async, output: false, mission: false,
+				label: "Return greeting", task: "Return a short greeting", async, output: false, mission: false,
 			}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 			assert.notEqual(result.isError, true, JSON.stringify(result));
 			if (async) {
 				assert.ok(result.details?.asyncId);
 				const payload = await readAsyncPayload(result.details.asyncId);
 				assert.equal(payload.success, true, JSON.stringify(payload));
+				assert.equal(payload.results?.[0]?.sessionName, "Return greeting");
+				assert.equal(payload.results?.[0]?.label, "Return greeting");
+				assert.ok(result.details.asyncDir);
+				assert.equal(readAsyncRecoveryDescriptor(result.details.asyncDir)?.label, "Return greeting");
+			} else {
+				assert.equal(result.details.results[0]?.sessionName, "Return greeting");
+				assert.equal(result.details.results[0]?.label, "Return greeting");
 			}
 			const calls = callRecords();
 			assert.equal(calls.length, 1);
@@ -40,6 +48,7 @@ describe("task-only execution without configured profiles", { skip: !available }
 			assert.equal(calls[0].runtime?.inheritProjectContext, true);
 			assert.equal(calls[0].runtime?.inheritGlobalContext, true);
 			assert.equal(calls[0].runtime?.inheritSkills, true);
+			assert.equal(calls[0].runtime?.sessionName, "Return greeting");
 		});
 	}
 
@@ -62,7 +71,7 @@ describe("task-only execution without configured profiles", { skip: !available }
 
 	it("does not bypass an allowed-agent ceiling when the profile is omitted", async () => {
 		const result = await executor().executePublic("task-ceiling", {
-			task: "Inspect", async: false, output: false, mission: false,
+			label: "Inspect", task: "Inspect", async: false, output: false, mission: false,
 			capabilityCeiling: { version: 1, allowedAgents: ["custom-only"], sources: ["test"] },
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(result.isError, true);
@@ -71,7 +80,7 @@ describe("task-only execution without configured profiles", { skip: !available }
 
 	it("keeps explicit fork strict when no parent session is available", async () => {
 		const result = await executor().executePublic("task-fork", {
-			task: "Inspect", context: "fork", async: false, output: false, mission: false,
+			label: "Inspect", task: "Inspect", context: "fork", async: false, output: false, mission: false,
 		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(result.isError, true);
 		assert.match(result.content.map(item => item.text).join("\n"), /fork|session/i);

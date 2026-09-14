@@ -40,6 +40,7 @@ External job profiles do not support foreground/clarify, steer/resume, Pi models
 
 ```typescript
 subagent({
+  label: "Challenge current direction",
   agent: "oracle",
   task: "Review my current direction and challenge assumptions."
 })

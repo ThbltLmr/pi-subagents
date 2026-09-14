@@ -84,6 +84,14 @@ export type FleetItem = (
 	| { key: string; kind: "external"; runId: string; agent: string; state: ExternalRun["state"]; updatedAt: number; run: ExternalRun }
 ) & { description?: string };
 
+/** Presentation only: never use this title for artifact paths or control routing. */
+function fleetItemTitle(item: FleetItem): string {
+	const sessionName = item.kind === "foreground-active" ? (item.activeChild ?? item.control).sessionName
+		: item.kind === "foreground-recent" ? item.child.sessionName
+			: item.kind === "async" ? item.step?.sessionName : undefined;
+	return sessionName?.trim() || item.agent;
+}
+
 export interface FleetSnapshot {
 	items: FleetItem[];
 	error?: string;
@@ -408,7 +416,7 @@ function foregroundActiveDetail(item: Extract<FleetItem, { kind: "foreground-act
 		control.parentWorkflowRunId ? `Workflow child of: ${control.parentWorkflowRunId}${control.workflowKey ? ` (${control.workflowKey})` : ""}` : undefined,
 		control.sourceRunId ? `Redo source: ${control.sourceRunId}` : undefined,
 		control.supersededByRunId ? `Superseded by: ${control.supersededByRunId}` : undefined,
-		item.index !== undefined ? `Child: ${item.index} (${item.agent})` : `Agent: ${item.agent}`,
+		item.index !== undefined ? `Child: ${item.index} (${fleetItemTitle(item)})` : `Agent: ${fleetItemTitle(item)}`,
 		modelThinking ? `Model: ${modelThinking}` : undefined,
 		promptSummary ? `Task: ${promptSummary}` : undefined,
 		`Started: ${new Date(live.startedAt).toISOString()}`,
@@ -487,7 +495,7 @@ function foregroundRecentDetail(item: Extract<FleetItem, { kind: "foreground-rec
 		"Source: foreground",
 		`State: ${child.status}`,
 		`Mode: ${run.mode}`,
-		`Child: ${child.index} (${child.agent})${contextModeLabel(child.context) ? ` ${contextModeLabel(child.context)}` : ""}`,
+		`Child: ${child.index} (${fleetItemTitle(item)})${contextModeLabel(child.context) ? ` ${contextModeLabel(child.context)}` : ""}`,
 		modelThinking ? `Model: ${modelThinking}` : undefined,
 		`Updated: ${new Date(child.updatedAt ?? run.updatedAt).toISOString()}`,
 		outputPath ? `Output: ${outputPath}` : undefined,
@@ -579,7 +587,7 @@ function asyncDetail(item: Extract<FleetItem, { kind: "async" }>, state: Subagen
 		"Source: async",
 		`State: ${item.state}`,
 		`Mode: ${item.run.mode}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
-		item.index !== undefined ? `Child: ${item.index} (${item.agent})${contextModeLabel(item.step?.context) ? ` ${contextModeLabel(item.step?.context)}` : ""}` : `Agent: ${item.agent}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
+		item.index !== undefined ? `Child: ${item.index} (${fleetItemTitle(item)})${contextModeLabel(item.step?.context) ? ` ${contextModeLabel(item.step?.context)}` : ""}` : `Agent: ${fleetItemTitle(item)}${contextModeLabel(item.run.context) ? ` ${contextModeLabel(item.run.context)}` : ""}`,
 		outputPath ? `Output: ${outputPath}` : undefined,
 		item.step?.sessionFile ? `Session: ${item.step.sessionFile}` : item.run.sessionFile ? `Session: ${item.run.sessionFile}` : undefined,
 		"",
@@ -742,7 +750,7 @@ function itemStats(item: FleetItem): string[] {
 
 function structuredHeader(item: FleetItem, width: number, theme: Theme, conversationState: string, promptSummary?: string): string[] {
 	const lines: string[] = [];
-	lines.push(rightAligned(` ${statusGlyph(item, theme)} ${theme.bold(item.agent)}`, theme.fg("dim", item.state), width));
+	lines.push(rightAligned(` ${statusGlyph(item, theme)} ${theme.bold(fleetItemTitle(item))}`, theme.fg("dim", item.state), width));
 	const child = "index" in item && item.index !== undefined ? ` · child ${item.index + 1}` : "";
 	const context = itemContext(item);
 	const identity = `${itemSource(item)} · ${item.runId.slice(0, 8)}${child} · ${itemMode(item)}${context ? ` ${context}` : ""}`;
@@ -1222,7 +1230,7 @@ export class SubagentFleetComponent implements Component {
 			const index = start + offset;
 			const marker = index === this.selected ? this.theme.fg("accent", "›") : " ";
 			const context = item.kind === "async" ? contextModeBadge(this.theme, item.step?.context ?? item.run.context) : item.kind === "foreground-recent" ? contextModeBadge(this.theme, item.child.context) : "";
-			const agent = index === this.selected ? this.theme.bold(item.agent) : item.agent;
+			const agent = index === this.selected ? this.theme.bold(fleetItemTitle(item)) : fleetItemTitle(item);
 			const identity = item.runId.slice(0, 8);
 			const left = `${marker} ${statusGlyph(item, this.theme)} ${agent}${context} ${this.theme.fg("dim", `· ${identity}`)}`;
 			return rightAligned(left, this.theme.fg("dim", item.state), width);
@@ -1262,12 +1270,12 @@ export class SubagentFleetComponent implements Component {
 		const raw = [
 			this.theme.bold("Prompt Audit"),
 			this.theme.fg("dim", "Retention: live memory only · no storage"),
-			selected?.kind === "foreground-active" ? `Run: ${selected.runId}${selected.index !== undefined ? ` · Child: ${selected.index}` : ""} · Agent: ${selected.agent}` : "Selected prompt unavailable",
+			selected?.kind === "foreground-active" ? `Run: ${selected.runId}${selected.index !== undefined ? ` · Child: ${selected.index}` : ""} · Agent: ${fleetItemTitle(selected)}` : "Selected prompt unavailable",
 			live ? `Started: ${new Date(live.startedAt).toISOString()}` : undefined,
 			live ? `Model: ${formatModelThinking(live.model, live.thinking) || "default"}` : undefined,
 			prompt?.cwd ? `Cwd: ${prompt.cwd}` : undefined,
 			prompt?.outputPath ? `Output: ${prompt.outputPath}` : undefined,
-			this.theme.fg("dim", `Live children: ${items.map(({ item }) => item.agent).join(", ") || "none"}`),
+			this.theme.fg("dim", `Live children: ${items.map(({ item }) => fleetItemTitle(item)).join(", ") || "none"}`),
 			this.theme.fg("dim", selectedPosition >= 0 ? `Selected: ${selectedPosition + 1}/${items.length}` : "Selected prompt unavailable"),
 			"",
 			this.theme.fg("accent", viewLabel),
@@ -1346,7 +1354,7 @@ export class SubagentFleetComponent implements Component {
 			? ` ${this.theme.bold("Fleet inspector")} ${this.theme.fg("dim", "· external display-only")}`
 			: ` ${this.theme.bold("Subagent fleet inspector")} ${this.theme.fg("dim", "· live controls")}`;
 		const selectedStatus = selected
-			? `${statusGlyph(selected, this.theme)} ${selected.agent} · ${selected.state} `
+			? `${statusGlyph(selected, this.theme)} ${fleetItemTitle(selected)} · ${selected.state} `
 			: this.theme.fg("dim", "no children ");
 		lines.push(this.theme.fg("border", "│") + rightAligned(title, selectedStatus, innerWidth) + this.theme.fg("border", "│"));
 		lines.push(this.theme.fg("border", `├${"─".repeat(rosterWidth)}┬${"─".repeat(detailWidth)}┤`));

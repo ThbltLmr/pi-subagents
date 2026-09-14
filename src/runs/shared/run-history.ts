@@ -8,6 +8,8 @@ export type RunOutcome = "completed" | "failed" | "timed_out" | "stopped" | "int
 
 export interface RunEntry {
 	agent: string;
+	/** Explicit user-facing title for direct launches, when supplied. */
+	label?: string;
 	task: string;
 	taskHash?: string;
 	ts: number;
@@ -138,7 +140,7 @@ export function recordRun(
 	task: string,
 	exitCode: number,
 	durationMs: number,
-	terminal: { interrupted?: boolean; processSignal?: string | null; stopped?: boolean; timedOut?: boolean; turnBudgetExceeded?: boolean } = {},
+	terminal: { interrupted?: boolean; processSignal?: string | null; stopped?: boolean; timedOut?: boolean; turnBudgetExceeded?: boolean; label?: string } = {},
 ): void {
 	try {
 		const outcome: RunOutcome = terminal.stopped
@@ -152,6 +154,7 @@ export function recordRun(
 						: exitCode === 0 ? "completed" : "failed";
 		const entry: RunEntry = {
 			agent,
+			...(terminal.label ? { label: terminal.label } : {}),
 			task: REDACTED_TASK,
 			taskHash: hashTask(task),
 			ts: Math.floor(Date.now() / 1000),
