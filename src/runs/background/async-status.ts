@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../../shared/formatters.ts";
 import { previewDisplayText } from "../../shared/display-text.ts";
+import { childDisplayName, displayAgentName } from "../../shared/child-session-name.ts";
 import { formatActivityLabel, formatParallelOutcome } from "../../shared/status-format.ts";
 import { type ActivityState, type AsyncJobStep, type AsyncParallelGroupStatus, type AsyncStatus, type CostSummary, type Details, type HostStepNode, type HostStepState, type LaunchResolvedChildExtensions, type RuntimeAcknowledgedChildExtensions, type NestedRunSummary, type SteeringStatus, type SubagentRunMode, type TimeoutRecoveryProjection, type TokenUsage, type TurnBudgetState, type UsageBudgetState, type WorktreeNaming, type WorkflowPreflight, type WorkflowGraphSnapshot } from "../../shared/types.ts";
 import type { ResolvedSubagentCapabilityCeiling, SubagentCapabilityAudit } from "../shared/capability-ceiling.ts";
@@ -616,7 +617,7 @@ function formatActivityFacts(input: { activityState?: ActivityState; lastActivit
 }
 
 function formatStepLine(step: AsyncRunStepSummary): string {
-	const display = step.sessionName?.trim() || (step.label ? `${step.label} (${step.agent})` : step.agent);
+	const display = childDisplayName(step);
 	const context = contextModeLabel(step.context);
 	const phase = step.phase ? `[${step.phase}] ` : "";
 	const parts = [`${step.index + 1}. ${phase}${display}${context ? ` ${context}` : ""}`, step.status];
@@ -662,7 +663,7 @@ export function formatWorkflowStageLine(node: WorkflowGraphSnapshot["nodes"][num
 	const id = previewDisplayText(node.id, 160);
 	const label = node.label ? previewDisplayText(node.label, 160) : "";
 	const display = label && label !== id ? ` | ${label}` : "";
-	const agent = node.agent ? ` | ${previewDisplayText(node.agent, 80)}` : "";
+	const agent = node.agent ? ` | ${previewDisplayText(displayAgentName(node.agent), 80)}` : "";
 	const error = node.error ? ` | ${previewDisplayText(node.error, 240)}` : "";
 	return `stage ${index + 1}/${total}: ${id}${display}${agent} | ${state}${error}`;
 }

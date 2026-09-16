@@ -5,6 +5,7 @@ import { getMarkdownTheme, type ExtensionContext } from "@earendil-works/pi-codi
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { snapshotExternalRuns, type ExternalRun } from "../api/external-runs.ts";
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
+import { childDisplayName, displayAgentName } from "../shared/child-session-name.ts";
 import { formatDuration, formatModelThinking, formatTokens, formatTokenUsage, shortenPath } from "../shared/formatters.ts";
 import { DIRS, type AsyncJobState, type AsyncJobStep, type Details, type FleetKeybindingAction, type FleetKeybindingsConfig, type ForegroundChildControl, type ForegroundResumeChild, type ForegroundResumeRun, type ForegroundRunControl, type SubagentState } from "../shared/types.ts";
 import { decodeUtf8Tail } from "../shared/utf8.ts";
@@ -86,10 +87,10 @@ export type FleetItem = (
 
 /** Presentation only: never use this title for artifact paths or control routing. */
 function fleetItemTitle(item: FleetItem): string {
-	const sessionName = item.kind === "foreground-active" ? (item.activeChild ?? item.control).sessionName
-		: item.kind === "foreground-recent" ? item.child.sessionName
-			: item.kind === "async" ? item.step?.sessionName : undefined;
-	return sessionName?.trim() || item.agent;
+	const child = item.kind === "foreground-active" ? item.activeChild ?? item.control
+		: item.kind === "foreground-recent" ? item.child
+			: item.kind === "async" ? item.step : undefined;
+	return childDisplayName(child, item.agent);
 }
 
 export interface FleetSnapshot {
@@ -520,7 +521,7 @@ function workflowStepLabel(step: AsyncJobStep, index: number): string {
 	const key = step.workflowKey ?? `step ${index + 1}`;
 	const label = step.label && step.label !== key ? ` · ${step.label}` : "";
 	const phase = step.phase ? `${step.phase}: ` : "";
-	return `${phase}${key}${label} (${step.agent})`;
+	return `${phase}${key}${label} (${displayAgentName(step.agent)})`;
 }
 
 function workflowStepActivity(step: AsyncJobStep): string | undefined {

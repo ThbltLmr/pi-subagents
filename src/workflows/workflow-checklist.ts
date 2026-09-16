@@ -1,5 +1,6 @@
 import type { AsyncJobStep, HostStepNode, WorkflowGraphNode, WorkflowGraphSnapshot, WorkflowPreflightLane, WorkflowPreflight } from "../shared/types.ts";
 import { sanitizeDisplayText } from "../shared/display-text.ts";
+import { displayAgentName } from "../shared/child-session-name.ts";
 import { workflowPreflightLaneForRuntimeKey as laneFor } from "./workflow-preflight.ts";
 
 export type WorkflowChecklistState = "complete" | "running" | "queued" | "blocked" | "failed" | "paused" | "stopped";
@@ -400,7 +401,7 @@ export function formatWorkflowChecklistPhase(phase: WorkflowChecklistPhase): str
 
 export function formatWorkflowChecklistBottleneck(item: WorkflowChecklistItem | undefined, options: { includeOutput?: boolean; includeError?: boolean } = {}): string | undefined {
 	if (!item) return undefined;
-	const identity = [item.label, item.agent && item.agent !== item.label ? item.agent : undefined].filter((value): value is string => Boolean(value)).join(" · ") || item.key;
+	const identity = [item.label, item.agent && item.agent !== item.label ? displayAgentName(item.agent) : undefined].filter((value): value is string => Boolean(value)).join(" · ") || item.key;
 	const includeOutput = options.includeOutput ?? true;
 	const includeError = options.includeError ?? true;
 	const details = [item.context ? `(${item.context})` : undefined, item.currentTool ? `${item.currentTool}${item.durationMs !== undefined ? ` ${formatDurationText(item.durationMs)}` : ""}` : undefined, !item.currentTool && item.currentPath ? item.currentPath : undefined, !item.currentTool && item.durationMs !== undefined ? formatDurationText(item.durationMs) : undefined, item.toolCount !== undefined ? `${item.toolCount} tools` : undefined, includeOutput && item.outputName ? `out:${item.outputName}` : undefined, includeError && item.error ? `error:${item.error.replace(/\bOutput:/g, "output:")}` : undefined].filter((value): value is string => Boolean(value));
@@ -408,8 +409,8 @@ export function formatWorkflowChecklistBottleneck(item: WorkflowChecklistItem | 
 }
 
 function formatWorkflowChecklistItem(item: WorkflowChecklistItem): string {
-	const identity = [item.label, item.agent && item.agent !== item.label ? item.agent : undefined].filter((value): value is string => Boolean(value)).join(" · ") || item.key;
-	const details = [item.kind && item.monitorKind ? item.monitorKind : undefined, item.provider ? `provider:${item.provider}` : undefined, item.role ? `role:${item.role}` : undefined, item.target, item.currentTool, !item.currentTool && item.currentPath ? item.currentPath : undefined, item.durationMs !== undefined ? formatDurationText(item.durationMs) : undefined, item.toolCount !== undefined ? `${item.toolCount} tools` : undefined, item.outputName ? `out:${item.outputName}` : undefined, item.reportPath ? `out:${item.reportPath}` : undefined, item.stale ? "stale" : undefined, item.reasonCode ? `reason:${item.reasonCode}` : undefined, item.error ? `error:${item.error.replace(/\bOutput:/g, "output:")}` : undefined].filter((value): value is string => Boolean(value));
+	const identity = [item.label, item.agent && item.agent !== item.label ? displayAgentName(item.agent) : undefined].filter((value): value is string => Boolean(value)).join(" · ") || item.key;
+	const details = [item.kind && item.monitorKind ? item.monitorKind : undefined, item.provider ? `provider:${item.provider}` : undefined, item.role ? `role:${displayAgentName(item.role)}` : undefined, item.target, item.currentTool, !item.currentTool && item.currentPath ? item.currentPath : undefined, item.durationMs !== undefined ? formatDurationText(item.durationMs) : undefined, item.toolCount !== undefined ? `${item.toolCount} tools` : undefined, item.outputName ? `out:${item.outputName}` : undefined, item.reportPath ? `out:${item.reportPath}` : undefined, item.stale ? "stale" : undefined, item.reasonCode ? `reason:${item.reasonCode}` : undefined, item.error ? `error:${item.error.replace(/\bOutput:/g, "output:")}` : undefined].filter((value): value is string => Boolean(value));
 	return `${identity}${item.context ? ` (${item.context})` : ""}${item.state === "complete" ? "" : ` · ${stateLabel(item.state)}`}${details.length ? ` · ${details.join(" · ")}` : ""}`;
 }
 

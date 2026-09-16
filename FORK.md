@@ -10,7 +10,7 @@ A native child no longer needs a named profile:
 subagent({ label: "Implement pagination", task: "Implement pagination and run the tests", model: "provider/model" });
 ```
 
-Direct single-child tool calls require a non-blank `label` of at most 50 characters. It is the UI title and stays separate from the internal `__task__` execution identity. Workflow children keep their existing optional step labels; workflow containers, management/control, and resume calls do not require a top-level label.
+Direct single-child tool calls require a non-blank `label` of at most 50 characters. It is the UI title and stays separate from the internal `__task__` execution identity. Workflow children keep their existing optional step labels, which become their session and UI titles in foreground and background runs. The UI never uses `__task__` as a role or header. Workflow containers, management/control, and resume calls do not require a top-level label.
 
 The task-only shape (without the direct-call label requirement) works in `runs.run(key, { task })`, `runs.all([{ key, task }])`, and workflow lanes. The extension delegation and preflight APIs also accept an omitted `agent`. Omitted context means `fresh` for task-only calls, even if a global preference says `fork`. Explicit `context: "fork"` still requires a usable parent session. Named custom profiles remain optional and retain their configured defaults.
 

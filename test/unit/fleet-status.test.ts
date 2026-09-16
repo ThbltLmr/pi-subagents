@@ -425,8 +425,8 @@ describe("below-editor subagent FleetView", () => {
 			assert.deepEqual(fleet.handleKey("\x1b[B"), { consume: true });
 			const lines = component.render(160);
 			const colorFor = (label: string) => lines.find((line) => line.includes(label))?.match(new RegExp(`⟦(\\w+)⟧${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))?.[1];
-			assert.equal(colorFor("Find seams (scout)"), colorFor("Audit API (scout)"));
-			assert.equal(colorFor("Find seams (scout)"), fleetAgentIdentityColor("scout"));
+			assert.equal(colorFor("Find seams"), colorFor("Audit API"));
+			assert.equal(colorFor("Find seams"), fleetAgentIdentityColor("scout"));
 		} finally {
 			fleet.dispose();
 		}

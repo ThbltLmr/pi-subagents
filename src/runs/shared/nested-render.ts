@@ -1,5 +1,6 @@
 import { formatDuration, formatModelThinking, formatTokenUsage, shortenPath } from "../../shared/formatters.ts";
 import { formatActivityLabel } from "../../shared/status-format.ts";
+import { childDisplayName, displayAgentName } from "../../shared/child-session-name.ts";
 import type { ActivityState, NestedRunSummary } from "../../shared/types.ts";
 
 export interface NestedRunCounts {
@@ -50,9 +51,8 @@ export function formatNestedAggregate(children: NestedRunSummary[] | undefined):
 }
 
 function nestedRunLabel(run: NestedRunSummary): string {
-	if (run.sessionName?.trim()) return run.sessionName.trim();
-	if (run.agent) return run.agent;
-	if (run.agents?.length) return run.agents.length === 1 ? run.agents[0]! : `${run.agents.slice(0, 2).join(", ")}${run.agents.length > 2 ? ` +${run.agents.length - 2}` : ""}`;
+	if (run.sessionName?.trim() || run.agent) return childDisplayName(run);
+	if (run.agents?.length) return run.agents.length === 1 ? displayAgentName(run.agents[0]!) : `${run.agents.slice(0, 2).map(displayAgentName).join(", ")}${run.agents.length > 2 ? ` +${run.agents.length - 2}` : ""}`;
 	return run.id;
 }
 
@@ -107,7 +107,7 @@ function formatNestedRunLines(children: NestedRunSummary[] | undefined, options:
 				if (lines.length >= options.maxLines) return;
 				const stepActivity = step.status === "running" ? formatNestedActivity(step) : undefined;
 				const stepModelThinking = formatModelThinking(step.model, step.thinking);
-				lines.push(`${indent}  ${stepIndex + 1}. ${step.sessionName?.trim() || step.agent} ${step.status}${stepModelThinking ? ` | ${stepModelThinking}` : ""}${stepActivity ? ` | ${stepActivity}` : ""}${step.error ? ` | error: ${step.error}` : ""}`);
+				lines.push(`${indent}  ${stepIndex + 1}. ${childDisplayName(step)} ${step.status}${stepModelThinking ? ` | ${stepModelThinking}` : ""}${stepActivity ? ` | ${stepActivity}` : ""}${step.error ? ` | error: ${step.error}` : ""}`);
 				append(step.children, depth + 1, `${indent}    `);
 			}
 			append(child.children, depth + 1, `${indent}  `);

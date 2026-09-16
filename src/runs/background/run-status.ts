@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { safeTerminalText } from "../../shared/display-text.ts";
+import { childDisplayName, displayAgentName } from "../../shared/child-session-name.ts";
 import { getArtifactPaths, getArtifactsDir } from "../../shared/artifacts.ts";
 import { readFleetTranscript } from "../../tui/fleet-transcript.ts";
 import { formatAsyncRunList, formatAsyncRunOutputPath, formatAsyncRunProgressLabel, formatWorkflowStageLine, listAsyncRuns } from "./async-status.ts";
@@ -164,13 +165,12 @@ function stepLineLabel(status: AsyncStatus, index: number): string {
 }
 
 function runStatusStepDisplayName(step: { agent: string; sessionName?: string; label?: string }): string {
-	return step.sessionName?.trim() || (step.label ? `${step.label} (${step.agent})` : step.agent);
+	return childDisplayName(step);
 }
 
 function nestedRunDisplayName(run: NestedRunSummary): string {
-	if (run.sessionName?.trim()) return run.sessionName.trim();
-	if (run.agent) return run.agent;
-	if (run.agents?.length) return run.agents.join(", ");
+	if (run.sessionName?.trim() || run.agent) return childDisplayName(run);
+	if (run.agents?.length) return run.agents.map(displayAgentName).join(", ");
 	return run.id;
 }
 
@@ -213,7 +213,7 @@ function formatRememberedForegroundStatus(run: ForegroundResumeRun): string {
 	for (const child of run.children) {
 		const output = rememberedForegroundChildOutput(child).trim().split(/\r?\n/).find((line) => line.trim());
 		const parts = [
-			`${child.index + 1}. ${child.sessionName?.trim() || child.agent} ${child.status}`,
+			`${child.index + 1}. ${childDisplayName(child)} ${child.status}`,
 			child.exitCode !== undefined ? `exit ${child.exitCode}` : undefined,
 			child.detachedReason ? `detached: ${child.detachedReason}` : undefined,
 			child.acceptance ? `acceptance: ${child.acceptance.status}` : undefined,
@@ -286,7 +286,7 @@ function formatLiveForegroundTranscript(control: ForegroundRunControl, state: Su
 		body = bytes.subarray(start).toString("utf-8");
 		truncated = true;
 	}
-	header.push(`Child: ${child.index} (${child.sessionName?.trim() || child.agent})`, `Transcript: ${transcriptPath}`);
+	header.push(`Child: ${child.index} (${childDisplayName(child)})`, `Transcript: ${transcriptPath}`);
 	if (transcript.warning) header.push(`Transcript warning: ${transcript.warning}`);
 	header.push(`Live transcript tail${truncated ? " (tail truncated)" : ""}:`);
 	if (!body) header.push("Transcript unavailable: no readable activity in the bounded artifact tail yet.");
@@ -305,7 +305,7 @@ function formatRememberedForegroundTranscript(run: ForegroundResumeRun, options:
 	const lines = [
 		`Run: ${run.runId}`,
 		`State: ${child.status}`,
-		`Child: ${index} (${child.sessionName?.trim() || child.agent})`,
+		`Child: ${index} (${childDisplayName(child)})`,
 		child.sessionFile ? `Session: ${child.sessionFile}` : undefined,
 		child.transcriptPath ? `Transcript: ${child.transcriptPath}` : undefined,
 		child.artifactPaths?.outputPath ? `Output: ${child.artifactPaths.outputPath}` : undefined,
@@ -341,7 +341,7 @@ function formatNestedExactStatus(rootRunId: string, run: NestedRunSummary): stri
 		for (const [index, step] of run.steps.entries()) {
 			const activity = step.status === "running" ? formatActivityLabel(step.lastActivityAt, step.activityState) : undefined;
 			const budget = step.turnBudget ? `, turn budget: ${step.turnBudget.turnCount}/${step.turnBudget.maxTurns}+${step.turnBudget.graceTurns} (${step.turnBudget.outcome})` : "";
-			lines.push(`  ${index + 1}. ${step.sessionName?.trim() || step.agent} ${step.status}${activity ? `, ${activity}` : ""}${budget}${step.error ? `, error: ${step.error}` : ""}`);
+			lines.push(`  ${index + 1}. ${childDisplayName(step)} ${step.status}${activity ? `, ${activity}` : ""}${budget}${step.error ? `, error: ${step.error}` : ""}`);
 			lines.push(...formatNestedRunStatusLines(step.children, { indent: "    ", commandHints: true }));
 		}
 	}

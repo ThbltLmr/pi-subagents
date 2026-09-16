@@ -3,10 +3,23 @@ import { describe, it } from "node:test";
 import {
 	CHILD_SESSION_NAME_MAX_CHARS,
 	deriveChildSessionName,
+	childDisplayName,
+	displayAgentName,
 } from "../../src/shared/child-session-name.ts";
 import { PROMPT_REDACTED } from "../../src/shared/utils.ts";
 
 describe("deriveChildSessionName", () => {
+	it("keeps the task-only execution identity out of derived and displayed names", () => {
+		assert.equal(deriveChildSessionName({ agent: "__task__", label: "Write README" }), "Write README");
+		assert.equal(deriveChildSessionName({ agent: "__task__", task: "Inspect the service" }), "Inspect the service");
+		assert.equal(deriveChildSessionName({ agent: "__task__" }), "subagent");
+		assert.equal(displayAgentName("__task__"), "subagent");
+		assert.equal(displayAgentName("reviewer"), "reviewer");
+		assert.equal(childDisplayName({ agent: "__task__", label: "Write README", sessionName: "__task__: stale task" }), "Write README");
+		assert.equal(childDisplayName({ agent: "__task__", sessionName: "__task__: Inspect the service" }), "Inspect the service");
+		assert.equal(childDisplayName({ agent: "reviewer", sessionName: "reviewer: Inspect the service" }), "reviewer: Inspect the service");
+	});
+
 	it("combines agent and task excerpt", () => {
 		assert.equal(
 			deriveChildSessionName({ agent: "reviewer", task: "Review the diff since main" }),

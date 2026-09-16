@@ -2,6 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type EditorComponent, isKeyRelease, Key, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { snapshotExternalRuns } from "../api/external-runs.ts";
 import { formatModelThinking } from "../shared/formatters.ts";
+import { childDisplayName, displayAgentName } from "../shared/child-session-name.ts";
 import type { AsyncJobState, AsyncJobStep, FleetViewPlacement, HerdrProjectPaneSnapshot, HostStepState, HostStepVerdict, NestedRunSummary, NestedStepSummary, SubagentState } from "../shared/types.ts";
 import { projectAsyncWorkflowRows, type AsyncStatusWorkflowRow } from "../runs/shared/async-status-projection.ts";
 import { contextModeLabel } from "../runs/shared/context-mode.ts";
@@ -135,8 +136,8 @@ function isActiveState(value: string): boolean {
 }
 
 function nestedRunLabel(run: NestedRunSummary): string {
-	if (run.agent) return run.agent;
-	if (run.agents?.length) return run.agents.length === 1 ? run.agents[0]! : `${run.agents.slice(0, 2).join(", ")}${run.agents.length > 2 ? ` +${run.agents.length - 2}` : ""}`;
+	if (run.sessionName || run.agent) return childDisplayName(run);
+	if (run.agents?.length) return run.agents.length === 1 ? displayAgentName(run.agents[0]!) : `${run.agents.slice(0, 2).map(displayAgentName).join(", ")}${run.agents.length > 2 ? ` +${run.agents.length - 2}` : ""}`;
 	return run.id;
 }
 
@@ -224,7 +225,7 @@ function nestedFleetRows(children: NestedRunSummary[] | undefined, visibleLimit:
 					const modelThinking = formatModelThinking(step.model, step.thinking) || undefined;
 					const activity = nestedActivity(step);
 					rows.push({
-						name: step.agent,
+						name: childDisplayName(step),
 						agentIdentity: step.agent,
 						state: step.status,
 						depth,
@@ -488,7 +489,7 @@ export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntr
 				key: `async:${job.asyncId}:${index}`,
 				...(linkedParentKey ? { parentKey: linkedParentKey } : {}),
 				agent: step.agent,
-				...(step.sessionName ? { displayLabel: step.sessionName } : step.label ? { displayLabel: `${step.label} (${step.agent})` } : {}),
+				...(step.sessionName || step.label ? { displayLabel: childDisplayName(step) } : {}),
 				...(modelThinking ? { modelThinking } : {}),
 				description: step.description ?? job.description,
 				startedAt: step.startedAt ?? startedAt,
@@ -856,7 +857,7 @@ export class SubagentFleetStatus {
 
 
 	private renderEntry(rosterIndex: number, selectedIndex: number, entry: FleetStatusEntry, width: number, theme: Theme, branch?: string, unclipped = false): string {
-		const label = entry.displayLabel ?? entry.agent;
+		const label = childDisplayName({ agent: entry.agent, sessionName: entry.displayLabel });
 		const agent = entry.modelThinking ? `${label} (${entry.modelThinking})` : label;
 		const prefix = branch ? `    ${branch}` : " ";
 		const checklist = entry.workflowWrapper && entry.workflowChecklist
@@ -936,7 +937,7 @@ export class SubagentFleetStatus {
 			detailElapsed(row),
 			row.tokens !== undefined ? formatFleetTokens(row.tokens, row.window) : undefined,
 			row.provider ? `provider:${row.provider}` : undefined,
-			row.role ? `role:${row.role}` : undefined,
+			row.role ? `role:${displayAgentName(row.role)}` : undefined,
 			row.target,
 			row.detail,
 			row.reasonCode ? `reason:${row.reasonCode}` : undefined,

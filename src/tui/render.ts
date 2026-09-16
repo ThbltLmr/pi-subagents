@@ -8,6 +8,8 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { getMarkdownTheme, keyText, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text, visibleWidth, type Component } from "@earendil-works/pi-tui";
 import { unresolvedChildWatchdogBlockers } from "../watchdog/child-status.ts";
+import { TASK_AGENT_NAME } from "../agents/task-agent.ts";
+import { childDisplayName, displayAgentName } from "../shared/child-session-name.ts";
 import {
 	type AgentProgress,
 	type AsyncJobState,
@@ -295,12 +297,6 @@ function oneLine(text: string): string {
 
 const COMPACT_TASK_MAX_CHARS = 96;
 
-/** Display label for a child run: the derived session name (agent + task
- *  excerpt) when the launcher provided one, else the bare agent name. */
-function childDisplayName(result: { agent?: string; sessionName?: string } | undefined, fallback = "subagent"): string {
-	return result?.sessionName?.trim() || result?.agent || fallback;
-}
-
 export function compactTaskText(task: string | undefined, label?: string): string | undefined {
 	const taskText = task?.trim();
 	const labelText = label?.trim();
@@ -554,7 +550,7 @@ export function projectAsyncLane(job: AsyncJobState, ...args: [selectedStep?: As
 	const label = compactTaskText(selectedStep?.description, selectedStep?.label)
 		?? boundedLaneValue(trace?.label)
 		?? (workspace ? undefined : boundedLaneValue(selectedStep?.workflowKey ?? job.workflowKey));
-	const role = boundedLaneValue(selectedStep?.agent ?? trace?.agent ?? job.agents?.[0] ?? widgetJobName(job), 32) ?? "subagent";
+	const role = boundedLaneValue(displayAgentName(selectedStep?.agent ?? trace?.agent ?? job.agents?.[0] ?? widgetJobName(job)), 32) ?? "subagent";
 	const phase = boundedLaneValue(selectedStep?.phase ?? trace?.phase);
 	const gate = laneGate(selectedStep);
 	const output = boundedLaneValue(selectedStep?.outputName);
@@ -690,7 +686,7 @@ function foregroundResultDisplayName(
 
 function foregroundSingleDisplayName(result: Details["results"][number] | undefined): string {
 	const label = normalizedParallelDisplayText(result?.label);
-	if (label) return label;
+	if (label || result?.agent === TASK_AGENT_NAME) return childDisplayName(result);
 	const agent = normalizedParallelDisplayText(result?.agent);
 	const sessionName = normalizedParallelDisplayText(result?.sessionName);
 	if (sessionName && (!agent || !sessionName.toLowerCase().startsWith(`${agent.toLowerCase()}: `))) return sessionName;
@@ -1119,6 +1115,7 @@ export function widgetRenderKey(job: AsyncJobState, expanded = false): string {
 }
 
 function formatWidgetAgents(agents: string[]): string {
+	agents = agents.map(displayAgentName);
 	const distinct = [...new Set(agents)];
 	if (distinct.length === 1 && agents.length > 1) return `${distinct[0]} ×${agents.length}`;
 	if (agents.length > 3) return `${agents.slice(0, 2).join(", ")} +${agents.length - 2} more`;
@@ -1128,7 +1125,8 @@ function formatWidgetAgents(agents: string[]): string {
 function widgetJobName(job: AsyncJobState): string {
 	if (job.mode === "parallel") return "parallel";
 	if (job.mode === "chain") return "chain";
-	if (job.mode === "single" && job.agents?.length === 1) return job.agents[0]!;
+	if (job.mode === "single" && job.steps?.length === 1 && job.steps[0]?.label) return childDisplayName(job.steps[0]);
+	if (job.mode === "single" && job.agents?.length === 1) return displayAgentName(job.agents[0]!);
 	if (job.agents?.length) return formatWidgetAgents(job.agents);
 	return job.mode ?? "subagent";
 }
@@ -1144,7 +1142,7 @@ function isCompletedWidgetStepStatus(status: AsyncJobStep["status"]): boolean {
 }
 
 function singleChildAgentName(job: AsyncJobState, step: AsyncJobStep): string {
-	if (step.label?.trim()) return step.label.trim();
+	if (step.label?.trim() || step.agent === TASK_AGENT_NAME) return childDisplayName(step);
 	const agent = step.agent?.trim();
 	const sessionName = step.sessionName?.trim();
 	if (sessionName && (!agent || !sessionName.toLowerCase().startsWith(`${agent.toLowerCase()}: `))) return sessionName;
@@ -1308,7 +1306,7 @@ function workflowChecklistItemPriority(state: WorkflowChecklistState): number {
 }
 
 function workflowChecklistItemLine(item: WorkflowChecklistItem, theme: Theme, indent: string, frame: number | undefined, includeError: boolean): string {
-	const identity = [item.label, item.agent && item.agent !== item.label ? item.agent : undefined].filter(Boolean).join(" · ");
+	const identity = [item.label, item.agent && item.agent !== item.label && item.agent !== TASK_AGENT_NAME ? displayAgentName(item.agent) : undefined].filter(Boolean).join(" · ");
 	const context = contextModeBadge(theme, item.context);
 	const state = item.state === "complete" ? "" : ` ${theme.fg("dim", `· ${workflowChecklistStateLabel(item.state)}`)}`;
 	const details = [
@@ -1405,7 +1403,7 @@ function compactWorkflowLaneState(items: readonly WorkflowChecklistItem[]): Work
 }
 
 function compactWorkflowLaneOwner(items: readonly WorkflowChecklistItem[]): string | undefined {
-	const owners = [...new Set(items.map((item) => item.agent ?? item.role).filter((value): value is string => Boolean(value?.trim())))];
+	const owners = [...new Set(items.map((item) => item.agent ?? item.role).filter((value): value is string => Boolean(value?.trim())).map(displayAgentName))];
 	if (owners.length === 0) return undefined;
 	return boundedLaneValue(owners.length > 2 ? `${owners.slice(0, 2).join(", ")} +${owners.length - 2}` : owners.join(", "), 32);
 }
@@ -1490,7 +1488,8 @@ function compactWorkflowLaneCounts(rows: readonly CompactWorkflowLaneRow[]): Com
 }
 
 function compactWorkflowLaneLine(row: CompactWorkflowLaneRow, theme: Theme, indent: string, frame?: number): string {
-	const owner = row.agent && row.mode ? `${row.agent}/${row.mode}` : row.agent ?? row.mode;
+	const agent = row.agent ? displayAgentName(row.agent) : undefined;
+	const owner = agent && row.mode ? `${agent}/${row.mode}` : agent ?? row.mode;
 	const state = row.state === "complete" ? undefined : row.state === "running" ? "active" : row.state;
 	const intent = [
 		row.decision,
@@ -1627,7 +1626,7 @@ function widgetParallelAgentDetails(job: AsyncJobState, theme: Theme, expanded =
 		const itemTitle = job.mode === "parallel" || job.activeParallelGroup ? "Agent" : "Step";
 		const modelDisplay = modelThinkingBadge(theme, step.model, step.thinking);
 		const label = compactTaskText(step.description, step.label);
-		const display = step.sessionName?.trim() || (label ? `${label} (${step.agent})` : step.agent);
+		const display = childDisplayName({ ...step, ...(label ? { label } : {}) });
 		lines.push(`  ${theme.fg("dim", `${marker} ${widgetStepGlyph(step.status, theme, widgetStepRunningSeed(step, index), frame)} ${itemTitle} ${index + 1}/${total}: ${display} · ${widgetStepStatus(step.status, theme)}${modelDisplay}${activity ? ` · ${activity}` : ""}`)}`);
 		const lane = projectAsyncLane(job, step);
 		if (lane) lines.push(...formatLaneProjectionLines(lane, theme, "    "));
@@ -1733,7 +1732,7 @@ function parallelWidgetStepDisplayName(step: AsyncJobStep): string {
 	const explicitLabel = normalizedParallelDisplayText(step.label);
 	if (explicitLabel) {
 		const label = compactTaskText(step.description, explicitLabel) ?? explicitLabel;
-		return agent ? `${label} (${agent})` : label;
+		return agent && agent !== TASK_AGENT_NAME ? `${label} (${agent})` : label;
 	}
 
 	const sessionName = normalizedParallelDisplayText(step.sessionName);
@@ -1742,7 +1741,7 @@ function parallelWidgetStepDisplayName(step: AsyncJobStep): string {
 		if (sessionTask && sessionTask !== PROMPT_REDACTED && sessionTask.toLowerCase() !== agent?.toLowerCase()) return sessionTask;
 	}
 
-	return compactTaskText(step.description) ?? agent ?? "subagent";
+	return compactTaskText(step.description) ?? (agent ? displayAgentName(agent) : "subagent");
 }
 
 function parallelWidgetStepPriority(step: AsyncJobStep): number {
@@ -2150,8 +2149,7 @@ function widgetOutputPath(job: AsyncJobState, step: NonNullable<AsyncJobState["s
 }
 
 function nestedRunName(run: NestedRunSummary): string {
-	if (run.sessionName?.trim()) return run.sessionName.trim();
-	if (run.agent) return run.agent;
+	if (run.sessionName?.trim() || run.agent) return childDisplayName(run);
 	if (run.agents?.length) return formatWidgetAgents(run.agents);
 	return run.id;
 }
@@ -2378,7 +2376,7 @@ function hostStepWidgetLines(job: AsyncJobState, theme: Theme, indent: string): 
 			: theme.fg("warning", "■");
 		const details = [
 			row.provider ? `provider:${row.provider}` : undefined,
-			row.role ? `role:${row.role}` : undefined,
+			row.role ? `role:${displayAgentName(row.role)}` : undefined,
 			row.target,
 			row.detail,
 			row.reasonCode ? `reason:${row.reasonCode}` : undefined,

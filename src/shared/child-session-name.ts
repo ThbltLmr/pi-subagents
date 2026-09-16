@@ -1,3 +1,4 @@
+import { TASK_AGENT_NAME } from "../agents/task-agent.ts";
 import { previewDisplayText } from "./display-text.ts";
 import { PROMPT_REDACTED } from "./utils.ts";
 
@@ -22,6 +23,18 @@ const TASK_EXCERPT_MAX_CHARS = 60;
 /** Hard cap on the final name so host UI rows stay one line. */
 export const CHILD_SESSION_NAME_MAX_CHARS = 80;
 
+/** Translate execution identities only at presentation boundaries. */
+export function displayAgentName(agent: string): string {
+	return agent === TASK_AGENT_NAME ? "subagent" : agent;
+}
+
+export function childDisplayName(input: { agent?: string; sessionName?: string; label?: string } | undefined, fallback = "subagent"): string {
+	if (input?.label?.trim()) return previewDisplayText(input.label.trim(), CHILD_SESSION_NAME_MAX_CHARS);
+	const name = input?.sessionName?.trim() || input?.agent?.trim() || fallback;
+	const taskPrefix = `${TASK_AGENT_NAME}: `;
+	return previewDisplayText(name.startsWith(taskPrefix) ? name.slice(taskPrefix.length) : displayAgentName(name), CHILD_SESSION_NAME_MAX_CHARS);
+}
+
 export function deriveChildSessionName(input: {
 	agent?: string;
 	task?: string;
@@ -40,7 +53,7 @@ export function deriveChildSessionName(input: {
 				? rawTask
 				: "";
 	const excerpt = excerptSource ? previewDisplayText(excerptSource, TASK_EXCERPT_MAX_CHARS) : "";
-	const base = agent && excerpt ? `${agent}: ${excerpt}` : agent || excerpt;
+	const base = agent === TASK_AGENT_NAME ? excerpt || "subagent" : agent && excerpt ? `${agent}: ${excerpt}` : agent || excerpt;
 	if (!base) return undefined;
 	return previewDisplayText(base, CHILD_SESSION_NAME_MAX_CHARS);
 }

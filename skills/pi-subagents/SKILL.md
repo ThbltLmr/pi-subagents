@@ -22,15 +22,15 @@ subagent({
   async: true,
   workflowScript: `
     const results = await runs.all([
-      { key: "code", task: "Review the changed code. Do not edit files." },
-      { key: "tests", task: "Review the changed tests. Do not edit files." }
+      { key: "code", label: "Review code", task: "Review the changed code. Do not edit files." },
+      { key: "tests", label: "Review tests", task: "Review the changed tests. Do not edit files." }
     ]);
     return results.map(result => result.output);
   `
 });
 ```
 
-Use `runs.run(key, { task })` for one step, `runs.all` for parallel steps, and `runs.lanes` for staged lanes. Use stable keys. Later steps can receive earlier results through their task text. Declare durable output with the `output` parameter rather than only naming a file in the task.
+Workflow child labels are optional and become the child's session and UI title. Use `runs.run(key, { task })` for one step, `runs.all` for parallel steps, and `runs.lanes` for staged lanes. Use stable keys. Later steps can receive earlier results through their task text. Declare durable output with the `output` parameter rather than only naming a file in the task.
 
 Workflow scripts support top-level `await`, plain helper functions, and Promise chains, but not nested async helpers. Resumes use the retained run ID and a new task, without `agent`.
 

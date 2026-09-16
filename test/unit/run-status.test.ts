@@ -5,7 +5,8 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { EXTERNAL_JOB_PROVIDER_REGISTRY_KEY, registerExternalJobProvider } from "../../src/api/external-job-provider.ts";
 import { updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
-import { formatAsyncResultTranscript } from "../../src/runs/background/fleet-view.ts";
+import { formatAsyncResultTranscript, formatAsyncRunTranscript } from "../../src/runs/background/fleet-view.ts";
+import { formatAsyncRunList, summarizeAsyncStatus } from "../../src/runs/background/async-status.ts";
 import { inspectSubagentStatus } from "../../src/runs/background/run-status.ts";
 import { createNestedRoute, writeNestedEvent } from "../../src/runs/shared/nested-events.ts";
 import { claimRunFanoutBatch, createRunFanoutBudget, writeRunFanoutBudgetDescriptor } from "../../src/runs/shared/run-fanout-budget.ts";
@@ -24,6 +25,22 @@ function textContent(result: ReturnType<typeof inspectSubagentStatus>): string {
 }
 
 describe("async run status inspection", () => {
+	it("uses readable task-only titles in status and transcript headers", () => {
+		for (const label of [undefined, "Write README"]) {
+			const status = { runId: "labeled-run", mode: "single" as const, state: "complete" as const, startedAt: 1,
+				steps: [{ agent: "__task__", ...(label ? { label } : {}), status: "complete" as const }],
+			};
+			for (const text of [
+				formatAsyncRunList([summarizeAsyncStatus("/tmp/labeled-run", status)]),
+				formatAsyncRunTranscript(status, "/tmp/labeled-run"),
+				formatAsyncResultTranscript({ id: "labeled-run", results: [{ agent: "__task__", sessionName: "__task__: Write README", output: "Done" }] }, "/tmp/labeled-result.json"),
+			]) {
+				assert.doesNotMatch(text, /__task__/);
+			}
+			assert.equal(status.steps[0]?.agent, "__task__");
+		}
+	});
+
 	it("preserves short transcript ANSI escaping and the unindented binary placeholder", () => {
 		const text = formatAsyncResultTranscript({
 			id: "short-preview", state: "complete",
@@ -802,7 +819,7 @@ describe("async run status inspection", () => {
 			assert.match(text, /fg-run \| running \| foreground: Inspect fleet/);
 			assert.doesNotMatch(text, /fg-run \| running \| scout/);
 			assert.match(text, /Async runs:/);
-			assert.match(text, /0\. worker: Inspect fleet \| running/);
+			assert.match(text, /0\. Fleet check \| running/);
 			assert.match(text, /run-fleet \| running .*\| parallel \| 1 agent running · 0\/2 done/);
 			assert.match(text, /transcript: subagent\(\{ action: "status", id: "run-fleet", view: "transcript" \}\)/);
 			assert.match(text, /transcript: subagent\(\{ action: "status", id: "run-fleet", index: 0, view: "transcript" \}\)/);

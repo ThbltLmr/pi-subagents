@@ -1,5 +1,6 @@
 import { sanitizeDisplayText, truncateDisplayText } from "../../shared/display-text.ts";
 import { formatModelThinking } from "../../shared/formatters.ts";
+import { displayAgentName } from "../../shared/child-session-name.ts";
 import type { AsyncJobState, AsyncJobStep, HostStepFreshness, HostStepMonitorKind, HostStepNode, HostStepState, HostStepVerdict, NestedRunSummary, NestedStepSummary, SubagentRunMode, WorkflowGraphSnapshot, WorkflowPreflightLane, WorkflowPreflight } from "../../shared/types.ts";
 import { HOST_STEP_MAX_COUNT, HOST_STEP_MAX_DETAIL_CHARS, HOST_STEP_MAX_LABEL_CHARS, HOST_STEP_MAX_PROVIDER_CHARS, HOST_STEP_MAX_REASON_CHARS, HOST_STEP_MAX_REF_CHARS, HOST_STEP_MAX_ROLE_CHARS, HOST_STEP_MAX_TARGET_CHARS, hostStepReportName, parseHostStepNode, validHostStepNodes } from "./host-step-status.ts";
 import { workflowPreflightLaneForRuntimeKey } from "../../workflows/workflow-preflight.ts";
@@ -400,7 +401,7 @@ function workflowStepName(step: AsyncJobStep, index: number): string {
 	const key = step.workflowKey ?? `step ${index + 1}`;
 	const label = step.label && step.label !== key ? ` · ${step.label}` : "";
 	const phase = step.phase ? `${step.phase}: ` : "";
-	return `${phase}${key}${label} (${step.agent})`;
+	return `${phase}${key}${label} (${displayAgentName(step.agent)})`;
 }
 
 function hostStepRow(hostStep: HostStepNode): AsyncStatusWorkflowRow {
@@ -464,7 +465,7 @@ function workflowGraphRowName(node: WorkflowGraphSnapshot["nodes"][number]): str
 	const label = publicOptionalText(node.label, HOST_STEP_MAX_LABEL_CHARS);
 	const phase = publicOptionalText(node.phase, HOST_STEP_MAX_LABEL_CHARS);
 	const agent = publicOptionalText(node.agent, HOST_STEP_MAX_LABEL_CHARS);
-	return `${phase ? `${phase}: ` : ""}${key}${label && label !== node.id ? ` · ${label}` : ""}${agent ? ` (${agent})` : ""}`;
+	return `${phase ? `${phase}: ` : ""}${key}${label && label !== node.id ? ` · ${label}` : ""}${agent ? ` (${displayAgentName(agent)})` : ""}`;
 }
 
 function projectWorkflowGraphRow(node: WorkflowGraphSnapshot["nodes"][number], preflight?: WorkflowPreflightLane): AsyncStatusWorkflowRow {

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { safeTerminalText, truncateDisplayText } from "../../shared/display-text.ts";
+import { childDisplayName, displayAgentName } from "../../shared/child-session-name.ts";
 import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../../shared/formatters.ts";
 import { formatActivityLabel } from "../../shared/status-format.ts";
 import {
@@ -77,11 +78,11 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 }
 
 function fleetChildDisplayName(child: { agent?: string; sessionName?: string }, fallback = "subagent"): string {
-	return child.sessionName?.trim() || child.agent || fallback;
+	return childDisplayName(child, fallback);
 }
 
 function fleetStepDisplayName(step: Pick<AsyncJobStep, "agent" | "sessionName" | "label">): string {
-	return step.sessionName?.trim() || (step.label ? `${step.label} (${step.agent})` : step.agent);
+	return childDisplayName(step);
 }
 
 function resolveMaybeRelative(asyncDir: string, filePath: string | undefined): string | undefined {
@@ -295,7 +296,7 @@ function formatActivityFacts(input: {
 }
 
 function foregroundModeName(control: ForegroundControl): string {
-	const currentDisplayName = control.sessionName?.trim() || control.currentAgent;
+	const currentDisplayName = childDisplayName({ agent: control.currentAgent, sessionName: control.sessionName }, "");
 	if (control.mode === "single" && currentDisplayName) return currentDisplayName;
 	return control.mode;
 }
@@ -315,7 +316,7 @@ function formatForegroundFleetLines(controls: ForegroundControl[]): string[] {
 			toolCount: control.toolCount,
 			...(control.tokens !== undefined ? { tokens: { total: control.tokens } } : {}),
 		});
-		const currentDisplayName = control.sessionName?.trim() || control.currentAgent;
+		const currentDisplayName = childDisplayName({ agent: control.currentAgent, sessionName: control.sessionName }, "");
 		const current = currentDisplayName ? ` | ${currentDisplayName}${control.currentIndex !== undefined ? ` #${control.currentIndex}` : ""}` : "";
 		lines.push(`- ${control.runId} | running | ${foregroundModeName(control)}${current}${activity ? ` | ${activity}` : ""}`);
 		lines.push(`  status: subagent({ action: "status", id: "${control.runId}" })`);
@@ -591,7 +592,7 @@ export function formatNestedRunTranscript(run: NestedRunSummary, options: Transc
 		`Nested run: ${run.id}`,
 		`State: ${run.state}`,
 		run.mode ? `Mode: ${run.mode}` : undefined,
-		run.sessionName?.trim() ? `Agent: ${run.sessionName.trim()}` : run.agent ? `Agent: ${run.agent}` : run.agents?.length ? `Agents: ${run.agents.join(", ")}` : undefined,
+		run.sessionName?.trim() || run.agent ? `Agent: ${childDisplayName(run)}` : run.agents?.length ? `Agents: ${run.agents.map(displayAgentName).join(", ")}` : undefined,
 	].filter((line): line is string => Boolean(line));
 	appendKnownArtifacts(lines, { outputPaths: [], sessionFile: run.sessionFile });
 	if (!run.sessionFile) {

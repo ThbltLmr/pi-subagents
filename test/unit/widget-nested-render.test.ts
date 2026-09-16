@@ -52,6 +52,45 @@ function job(child: NestedRunSummary): AsyncJobState {
 }
 
 describe("nested widget rendering", () => {
+	it("hides task-only identities in unlabeled parallel children", () => {
+		const parallel: AsyncJobState = {
+			asyncId: "parallel-run", asyncDir: "/tmp/parallel-run", mode: "parallel", status: "running",
+			agents: ["__task__"], startedAt: 0, updatedAt: 1_500,
+			steps: [{ agent: "__task__", status: "running" }],
+		};
+		for (const expanded of [false, true]) {
+			const rendered = buildWidgetLines([parallel], theme as any, 240, expanded).join("\n");
+			assert.doesNotMatch(rendered, /__task__/);
+		}
+	});
+
+	it("uses workflow child labels in materialized headers and hides internal roles", () => {
+		const label = "Write grid-timeshift README";
+		const parent: AsyncJobState = {
+			asyncId: "docs-flow", asyncDir: "/tmp/docs-flow", mode: "workflow", status: "running",
+			startedAt: 0, updatedAt: 1_500,
+			steps: [{ agent: "__task__", workflowKey: "grid-timeshift.write", label, status: "running" }],
+		};
+		for (const labeled of [true, false]) {
+			const child: AsyncJobState = {
+				asyncId: "writer-run", asyncDir: "/tmp/writer-run", mode: "single", status: "running",
+				parentWorkflowRunId: "docs-flow", workflowKey: "grid-timeshift.write", agents: ["__task__"],
+				cwd: "/tmp/docs-project", startedAt: 0, updatedAt: 1_500, stepsTotal: 1,
+				steps: [{ index: 0, agent: "__task__", status: "running",
+					sessionName: labeled ? label : "__task__: Research and document the service",
+					...(labeled ? { label } : {}),
+				}],
+			};
+			for (const expanded of [false, true]) {
+				const rendered = buildWidgetLines([parent, child], theme as any, 240, expanded).join("\n");
+				assert.match(rendered, /grid-timeshift\.write/);
+				if (labeled) assert.match(rendered, /Write grid-timeshift README/);
+				assert.doesNotMatch(rendered, /__task__/);
+			}
+			assert.equal(child.steps?.[0]?.agent, "__task__", "rendering must not mutate control identity");
+		}
+	});
+
 	it("renders a bounded collapsed tree and full child rows when expanded", () => {
 		const child = nested("nested-reviewer", "root-run", "running", { sessionName: "  nested-reviewer: Review nested run  ", currentTool: "read", model: "gpt-5.6-luna:medium", thinking: "medium" });
 		const collapsed = buildWidgetLines([job(child)], theme as any, 120, false).join("\n");
