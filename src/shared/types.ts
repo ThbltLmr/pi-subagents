@@ -2410,9 +2410,9 @@ export interface RunSyncOptions {
 	index?: number;
 	sessionDir?: string;
 	sessionFile?: string;
-	/** Explicit user-facing label for a direct launch. */
+	/** Explicit user-facing label for a child launch. */
 	label?: string;
-	/** Explicit user-facing session title for a direct launch. */
+	/** Explicit user-facing session title for a child launch. */
 	sessionName?: string;
 	share?: boolean;
 	outputPath?: string;

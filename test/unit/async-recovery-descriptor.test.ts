@@ -19,7 +19,7 @@ afterEach(() => {
 });
 
 describe("async recovery descriptor", () => {
-	it("retains direct spawn labels and rejects malformed persisted labels", () => {
+	it("retains direct and workflow labels and rejects malformed persisted labels", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-recovery-label-"));
 		try {
 			const descriptor = {
@@ -27,11 +27,11 @@ describe("async recovery descriptor", () => {
 				agent: "__task__", cwd: root, systemPromptMode: "append", outputMode: "inline",
 				inheritGlobalContext: true, inheritProjectContext: true, inheritSkills: true, maxSubagentDepth: 2, share: false,
 			};
-			for (const label of [undefined, "Review auth", "x".repeat(50)]) {
+			for (const label of [undefined, "Review auth", "x".repeat(50), "Workflow label ".repeat(8).trim()]) {
 				fs.writeFileSync(path.join(root, "recovery-descriptor.json"), JSON.stringify({ ...descriptor, label }));
 				assert.equal(readAsyncRecoveryDescriptor(root)?.label, label);
 			}
-			for (const label of ["", " ", " padded ", "x".repeat(51), false, 1, null]) {
+			for (const label of ["", " ", " padded ", false, 1, null]) {
 				fs.writeFileSync(path.join(root, "recovery-descriptor.json"), JSON.stringify({ ...descriptor, label }));
 				assert.throws(() => readAsyncRecoveryDescriptor(root), /label must be/);
 			}

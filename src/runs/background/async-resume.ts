@@ -333,8 +333,9 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	for (const field of requiredStrings) {
 		if (typeof parsed[field] !== "string" || !(parsed[field] as string).trim()) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must be a non-empty string.`);
 	}
-	if (parsed.label !== undefined && (typeof parsed.label !== "string" || !parsed.label.trim() || parsed.label !== parsed.label.trim() || parsed.label.length > 50)) {
-		throw new Error(`Invalid async recovery descriptor '${descriptorPath}': label must be trimmed, non-blank text of at most 50 characters.`);
+	// Direct spawns enforce their 50-character API limit before launch; workflow labels have no such limit.
+	if (parsed.label !== undefined && (typeof parsed.label !== "string" || !parsed.label.trim() || parsed.label !== parsed.label.trim())) {
+		throw new Error(`Invalid async recovery descriptor '${descriptorPath}': label must be trimmed, non-blank text.`);
 	}
 	if (parsed.version !== 1) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': version must be 1.`);
 	try {

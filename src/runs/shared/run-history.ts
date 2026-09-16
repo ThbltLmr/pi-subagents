@@ -8,7 +8,7 @@ export type RunOutcome = "completed" | "failed" | "timed_out" | "stopped" | "int
 
 export interface RunEntry {
 	agent: string;
-	/** Explicit user-facing title for direct launches, when supplied. */
+	/** Explicit user-facing title for child launches, when supplied. */
 	label?: string;
 	task: string;
 	taskHash?: string;

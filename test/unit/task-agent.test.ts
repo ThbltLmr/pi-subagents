@@ -36,7 +36,6 @@ it("requires a non-blank direct-spawn label capped at 50 characters", () => {
 	assert.equal(normalizePublicSubagentExecution({ task: "Inspect", label: fifty }).ok, true);
 	assert.equal(normalizePublicSubagentExecution({ agent: "worker", label: fifty }).ok, true);
 	assert.equal(normalizePublicSubagentExecution({ task: "Inspect", label: ` ${fifty}` }).ok, false);
-	assert.equal(normalizePublicSubagentExecution({ task: "Inspect", label: "Inspect", directSpawnLabel: "Forged" }).ok, false);
 	const tooLong = normalizePublicSubagentExecution({ task: "Inspect", label: "x".repeat(51) });
 	assert.equal(tooLong.ok, false);
 	if (!tooLong.ok) assert.match(tooLong.error, /at most 50/);

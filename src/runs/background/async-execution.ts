@@ -217,7 +217,7 @@ interface AsyncChainParams {
 
 interface AsyncSingleParams {
 	agent: string;
-	/** Explicit user-facing title for a direct single-child launch. */
+	/** Explicit user-facing title from a direct spawn or workflow child. */
 	label?: string;
 	task?: string;
 	/** Raw caller-facing goal used only by the started event. */
