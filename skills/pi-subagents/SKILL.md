@@ -17,18 +17,17 @@ The label is display-only. Workflow steps keep their optional labels, and workfl
 
 ## Workflows
 
-```js
-subagent({
-  async: true,
-  workflowScript: `
-    const results = await runs.all([
-      { key: "code", label: "Review code", task: "Review the changed code. Do not edit files." },
-      { key: "tests", label: "Review tests", task: "Review the changed tests. Do not edit files." }
-    ]);
-    return results.map(result => result.output);
-  `
-});
+Write one block in the reply, then call `subagent({ workflow: true, async: true })` in the same reply:
+
+```js workflow
+const results = await runs.all([
+  { key: "code", label: "Review code", task: "Review the changed code. Do not edit files." },
+  { key: "tests", label: "Review tests", task: "Review the changed tests. Do not edit files." }
+]);
+return results.map(result => result.output);
 ```
+
+Use `workflow: "./path/to/script.js"` for a script file or `workflow: "<name>"` for a named resource. With `disabledFeatures: ["workflow-scripts"]`, use the replacement `chain` / `tasks` inputs described in [configuration](../../docs/configuration.md#chain-and-tasks-without-workflow-scripts).
 
 Workflow child labels are optional and become the child's session and UI title. Use `runs.run(key, { task })` for one step, `runs.all` for parallel steps, and `runs.lanes` for staged lanes. Use stable keys. Later steps can receive earlier results through their task text. Declare durable output with the `output` parameter rather than only naming a file in the task.
 

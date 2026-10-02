@@ -6,11 +6,14 @@ import { finished } from "node:stream/promises";
 import type { ExternalProcessStatus, ProcessTreeTerminal } from "../../shared/types.ts";
 import { createOwnedProcessTreeController, type OwnedProcessTreeController } from "../background/owned-process-tree.ts";
 import { omitExtensionBindingsEnv } from "./extension-bindings.ts";
+import { omitGitRoutingEnv } from "./git-environment.ts";
 import {
 	invalidateExternalCliPreflight,
 	preflightExternalCli,
+	resolveExternalCliSpawn,
 	type ExternalCliPreflightResult,
 	type ExternalCliPreflightSpec,
+	type ExternalCliSpawn,
 } from "./external-cli-preflight.ts";
 
 const MAX_OUTPUT_TAIL_BYTES = 64 * 1024;
@@ -86,7 +89,8 @@ function narrowLimit(value: number | undefined, ceiling: number, label: string):
 }
 
 function externalEnvironment(allowlist: readonly string[] | undefined, values: Readonly<Record<string, string>> | undefined): NodeJS.ProcessEnv {
-	if (!allowlist) return omitExtensionBindingsEnv(process.env);
+	// An adapter allowlist is a deliberate choice, so only the inherited default is filtered.
+	if (!allowlist) return omitGitRoutingEnv(omitExtensionBindingsEnv(process.env));
 	const allowed = new Set(allowlist);
 	const env: NodeJS.ProcessEnv = {};
 	for (const key of allowed) {
@@ -196,6 +200,7 @@ export function runExternalCli(input: {
 		};
 		const env = externalEnvironment(input.environment?.allowlist, input.environment?.values);
 		let preflight: ExternalCliPreflightResult | undefined;
+		let launch: ExternalCliSpawn;
 		try {
 			for (const directory of input.temporaryDirectories ?? []) {
 				fs.mkdirSync(directory, { mode: 0o700 });
@@ -208,6 +213,7 @@ export function runExternalCli(input: {
 				finally { fs.closeSync(promptDescriptor); }
 			}
 			if (input.preflight) preflight = preflightExternalCli(input.command, input.preflight, env, input.cwd);
+			launch = resolveExternalCliSpawn(preflight?.binaryPath ?? input.command, input.args ?? [], env);
 		} catch (error) {
 			const endedAt = Date.now();
 			const externalProcess = { startedAt, endedAt, durationMs: endedAt - startedAt, exitCode: 1, processSignal: null, stdoutPath, stderrPath, ...(input.finalOutputPath ? { finalOutputPath: input.finalOutputPath } : {}) } satisfies ExternalProcessStatus;
@@ -327,7 +333,7 @@ export function runExternalCli(input: {
 			}
 			appendPendingLine(chunk.subarray(start));
 		};
-		const child = spawn(preflight?.binaryPath ?? input.command, input.args ?? [], {
+		const child = spawn(launch.command, launch.args, {
 			cwd: input.cwd,
 			env,
 			stdio: ["pipe", "pipe", "pipe"],

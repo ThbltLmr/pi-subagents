@@ -18,7 +18,7 @@ export interface RunnerChildLaunchContext {
 	runFanoutBudget?: BuildInProcessChildLaunchInput["runFanoutBudget"];
 	capabilityCeiling?: BuildInProcessChildLaunchInput["capabilityCeiling"];
 	inheritedChildRuntime?: InheritedChildRuntime;
-	hostAvailableBuiltins?: readonly string[];
+	projectTrusted?: boolean;
 }
 
 export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChildLaunchContext, attempt: {
@@ -35,6 +35,9 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		? formatAcceptancePrompt(step.effectiveAcceptance, { reportOptional: isAgentContract(step.agentContract), structuredOutput: Boolean(step.structuredOutput?.acceptanceReportPath) })
 		: "";
 	return buildInProcessChildLaunch({
+		machine: step.machine,
+		remoteSkillNames: step.skills,
+		remoteReads: step.remoteReads,
 		parentSessionId: step.parentSessionId,
 		forkCacheKey: step.context === "fork" ? deriveForkPromptCacheKey(step.parentSessionId) : undefined,
 		sessionEnabled: attempt.sessionEnabled,
@@ -48,17 +51,20 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		tools: step.tools,
 		excludeTools: step.excludeTools,
 		allowNestedSubagents: step.allowNestedSubagents,
+		descendantAllowedAgents: step.allowedAgents,
 		extensions: step.extensions,
 		subagentOnlyExtensions: step.subagentOnlyExtensions,
+		requiredExtensions: step.requiredExtensions,
 		fast: step.fast,
-		modelCandidates: step.modelCandidates,
 		systemPrompt: acceptancePrompt ? `${step.systemPrompt ?? ""}\n${acceptancePrompt}` : step.systemPrompt ?? "",
 		systemPromptMode: step.systemPromptMode,
 		mcpDirectTools: step.mcpDirectTools,
+		builtinMcpTools: step.builtinMcpTools,
 		extensionBindings: normalizeExtensionBindings(step.extensionBindings)?.value,
 		capabilityCeiling: step.capabilityCeiling ?? ctx.capabilityCeiling,
 		cwd: step.cwd ?? ctx.cwd,
 		intercomSessionName: ctx.childIntercomTarget,
+		projectTrusted: ctx.projectTrusted,
 		sessionName: attempt.sessionName,
 		orchestratorIntercomTarget: ctx.orchestratorIntercomTarget,
 		runId: ctx.id,
@@ -82,7 +88,6 @@ export function buildRunnerChildLaunch(step: RunnerSubagentStep, ctx: RunnerChil
 		thinkingCeiling: step.thinkingCeiling,
 		maxSubagentDepth: step.maxSubagentDepth,
 		inherited: ctx.inheritedChildRuntime,
-		hostAvailableBuiltins: ctx.hostAvailableBuiltins,
 		host: "runner",
 	});
 }

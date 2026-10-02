@@ -6,8 +6,8 @@ import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { createEventBus, createMockPi, createTempDir, events, removeTempDir, resolveMockPiCallArgs, tryImport } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
+import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey } from "../../src/runs/background/active-async-capacity.ts";
-import { clearExclusions } from "../../src/runs/shared/model-exclusions.ts";
 import { DEFAULT_FORK_PREAMBLE, INTERCOM_DETACH_REQUEST_EVENT, SUBAGENT_ASYNC_STARTED_EVENT } from "../../src/shared/types.ts";
 
 interface ExecutorModule {
@@ -108,11 +108,9 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		tempDir = createTempDir("pi-subagent-fork-test-");
 		mockPi.reset();
 		mockPi.onCall({ output: "ok" });
-		clearExclusions();
 	});
 
 	afterEach(() => {
-		clearExclusions();
 		if (originalHome === undefined) delete process.env.HOME;
 		else process.env.HOME = originalHome;
 		if (originalUserProfile === undefined) delete process.env.USERPROFILE;
@@ -134,7 +132,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		}), config);
 	}
 
-	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents, config: Record<string, unknown> = {}) {
+	function makeExecutorWithDiscoverAgents(discoverAgentsImpl: typeof discoverAgents, config: Record<string, unknown> = {}, extraDeps: Record<string, unknown> = {}) {
 		let sessionName: string | undefined;
 		const eventsApi = createEventBus();
 		return Object.assign(createSubagentExecutor({
@@ -153,6 +151,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			getSubagentSessionRoot: () => tempDir,
 			expandTilde: (p: string) => p,
 			discoverAgents: discoverAgentsImpl,
+			...extraDeps,
 		}), { eventsApi });
 	}
 
@@ -312,7 +311,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.match(args[systemIndex + 1] ?? "", /## Acceptance Contract/);
 	});
 
-	it("fails pruned fork model auth before child spawn", async () => {
+	it("does not manually preflight pruned fork model auth before child spawn", async () => {
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");
 		const { manager } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
 		const executor = makeExecutorWithConfig({ forkContext: { mode: "pruned", model: "test/pruner" } });
@@ -322,14 +321,95 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 			modelRegistry: {
 				getAvailable: () => [model],
 				find: () => model,
-				getApiKeyAndHeaders: async () => ({ ok: false as const, error: "credentials unavailable" }),
+				getApiKeyAndHeaders: async () => { throw new Error("manual auth extraction must not run"); },
 			},
 		};
 
 		const result = await executor.execute("id", { agent: "echo", task: "test", context: "fork" }, new AbortController().signal, undefined, ctx);
+		assert.equal(result.isError, undefined);
+		assert.equal(fs.readdirSync(mockPi.dir).some((name) => name.startsWith("call-") && name.endsWith(".json")), true);
+	});
+
+	for (const forkMode of ["pruned", "full"] as const) {
+		it(`denies a ceiling-restricted agent before ${forkMode} fork preparation`, async () => {
+			const parentSessionFile = path.join(tempDir, "parent.jsonl");
+			const { manager, openedPaths } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+			const executor = makeExecutorWithConfig(forkMode === "pruned" ? { forkContext: { mode: "pruned", model: "test/pruner" } } : {});
+			const model = { provider: "test", id: "pruner", api: "test-api", maxTokens: 1024 };
+			const registryCalls: string[] = [];
+			const ctx = {
+				...makeCtx(manager),
+				modelRegistry: {
+					getAvailable: () => { registryCalls.push("getAvailable"); return [model]; },
+					find: () => { registryCalls.push("find"); return model; },
+					getApiKeyAndHeaders: async () => { registryCalls.push("getApiKeyAndHeaders"); return {}; },
+				},
+			};
+			const handle = registerSubagentCapabilityCeiling({ sessionId: parentSessionFile, source: "plan-mode", ceiling: { allowedAgents: ["second"] } });
+			try {
+				const result = await executor.execute("id", { agent: "echo", task: "test", context: "fork" }, new AbortController().signal, undefined, ctx);
+				assert.equal(result.isError, true);
+				assert.match(result.content[0]?.text ?? "", /does not allow agent 'echo'/);
+				assert.deepEqual(openedPaths, []);
+				assert.deepEqual(registryCalls, []);
+				assert.equal(fs.readdirSync(mockPi.dir).some((name) => name.startsWith("call-") && name.endsWith(".json")), false);
+			} finally {
+				handle.dispose();
+			}
+		});
+	}
+
+	for (const scenario of [
+		{ name: "an allowed agent listed before it", params: { tasks: [{ agent: "echo", task: "a" }, { agent: "second", task: "b" }] }, hasUI: false },
+		{ name: "clarify with a UI", params: { agent: "second", task: "b", clarify: true }, hasUI: true },
+	] as const) {
+		it(`denies a ceiling-restricted agent before any fork with ${scenario.name}`, async () => {
+			const parentSessionFile = path.join(tempDir, "parent.jsonl");
+			const { manager, openedPaths } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+			const handle = registerSubagentCapabilityCeiling({ sessionId: parentSessionFile, source: "plan-mode", ceiling: { allowedAgents: ["echo"] } });
+			try {
+				const result = await makeExecutor().execute("id", { ...scenario.params, context: "fork" }, new AbortController().signal, undefined, { ...makeCtx(manager), hasUI: scenario.hasUI });
+				assert.equal(result.isError, true);
+				assert.match(result.content[0]?.text ?? "", /does not allow agent 'second'/);
+				assert.deepEqual(openedPaths, []);
+			} finally {
+				handle.dispose();
+			}
+		});
+	}
+
+	it("denies before any fork when only the inherited child-runtime ceiling excludes the agent", async () => {
+		const parentSessionFile = path.join(tempDir, "parent.jsonl");
+		const { manager, openedPaths } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const executor = makeExecutorWithDiscoverAgents(() => ({
+			agents: [{ name: "echo", description: "Echo test agent" }, { name: "second", description: "Second test agent" }],
+			projectAgentsDir: null,
+		}), {}, { childRuntime: { fanoutChild: false, capabilityCeiling: { version: 1, allowedAgents: ["echo"], denyExtensions: false, sources: ["parent"] } } });
+		const result = await executor.execute("id", { agent: "second", task: "b", context: "fork" }, new AbortController().signal, undefined, makeCtx(manager));
 		assert.equal(result.isError, true);
-		assert.match(result.content.map((block) => block.text).join("\n"), /Pruned fork model auth failed.*credentials unavailable/);
-		assert.equal(fs.readdirSync(mockPi.dir).some((name) => name.startsWith("call-") && name.endsWith(".json")), false);
+		assert.match(result.content[0]?.text ?? "", /does not allow agent 'second'/);
+		assert.deepEqual(openedPaths, []);
+	});
+
+	it("does not deny a ceiling-restricted dynamic template that fork preflight never prepares", async () => {
+		const parentSessionFile = path.join(tempDir, "parent.jsonl");
+		const { manager, openedPaths } = makeForkingSessionManagerRecorder({ sessionFile: parentSessionFile, leafId: "leaf-current" });
+		const handle = registerSubagentCapabilityCeiling({ sessionId: parentSessionFile, source: "plan-mode", ceiling: { allowedAgents: ["echo"] } });
+		try {
+			const result = await makeExecutor().execute("id", {
+				context: "fork",
+				chain: [
+					{ agent: "echo", task: "Produce targets", as: "targets", outputSchema: { type: "object" } },
+					{ expand: { from: { output: "targets", path: "/items" }, item: "target", maxItems: 0 }, parallel: { agent: "second", task: "Review {target}" }, collect: { as: "reviews" } },
+				],
+				clarify: false,
+			}, new AbortController().signal, undefined, makeCtx(manager));
+			assert.doesNotMatch(result.content[0]?.text ?? "", /does not allow agent/);
+			// The allowed step's fork was prepared, so preflight got past the zero-item template.
+			assert.notDeepEqual(openedPaths, []);
+		} finally {
+			handle.dispose();
+		}
 	});
 
 
@@ -572,70 +652,7 @@ describe("fork context execution wiring", { skip: !available ? "subagent executo
 		assert.equal(entries.length, 2);
 		assert.ok(!entries.some((entry) => entry.type === "thinking_level_change"));
 	});
-
-	it("keeps thinking on every foreground fallback attempt after sanitizing inherited signed thinking", async () => {
-		mockPi.reset();
-		mockPi.onCall({
-			jsonl: [{
-				type: "message_end",
-				message: {
-					role: "assistant",
-					content: [{ type: "text", text: "temporary provider failure" }],
-					model: "openai/gpt-5-mini",
-					errorMessage: "rate limit exceeded",
-					usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
-				},
-			}],
-			exitCode: 1,
-		});
-		mockPi.onCall({ output: "Recovered on fallback" });
-		const parentSessionFile = path.join(tempDir, "parent.jsonl");
-		const childSessionFile = path.join(tempDir, "fork-with-thinking.jsonl");
-		fs.writeFileSync(parentSessionFile, '{"type":"session","version":1,"id":"parent","timestamp":"2026-04-16T00:00:00.000Z","cwd":"/tmp"}\n', "utf-8");
-		const manager = {
-			getSessionId: () => "session-123",
-			getSessionFile: () => parentSessionFile,
-			getLeafId: () => "assistant-1",
-			openSession: () => ({
-				createBranchedSession: () => {
-					fs.writeFileSync(childSessionFile, [
-						{ type: "session", version: 1, id: "child", timestamp: "2026-04-16T00:00:00.000Z", cwd: "/tmp", parentSession: parentSessionFile },
-						{ type: "message", id: "assistant-1", parentId: null, timestamp: "2026-04-16T00:00:02.000Z", message: { role: "assistant", provider: "anthropic", api: "anthropic-messages", model: "anthropic/claude-sonnet-4-5", content: [{ type: "thinking", thinking: "private chain", thinkingSignature: "signed" }, { type: "text", text: "answer" }] } },
-					].map((entry) => JSON.stringify(entry)).join("\n") + "\n", "utf-8");
-					return childSessionFile;
-				},
-			}),
-		};
-		const executor = makeExecutorWithDiscoverAgents(() => ({
-			agents: [
-				{ name: "worker", description: "Worker", defaultContext: "fork", model: "openai/gpt-5-mini:high", fallbackModels: ["anthropic/claude-sonnet-4:low"], thinking: "high" },
-			],
-			projectAgentsDir: null,
-		}));
-
-		const ctx = {
-			...makeCtx(manager),
-			modelRegistry: {
-				getAvailable: () => [
-					{ provider: "openai", id: "gpt-5-mini", api: "openai-responses", reasoning: true },
-					{ provider: "anthropic", id: "claude-sonnet-4", api: "anthropic-messages", reasoning: true },
-				],
-			},
-		};
-		const result = await executor.execute(
-			"id",
-			{ agent: "worker", task: "test" },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		);
-
-		assert.equal(result.isError, undefined);
-		const modelArgs = readAllCallArgs().map((args) => args[args.indexOf("--model") + 1]);
-		assert.deepEqual(modelArgs, ["openai/gpt-5-mini:high", "anthropic/claude-sonnet-4:low"]);
-	});
-
-	it("keeps requested thinking for non-Anthropic forked children without Anthropic fallbacks", async () => {
+	it("keeps requested thinking for non-Anthropic forked children", async () => {
 		mockPi.reset();
 		mockPi.onCall({ output: "done" });
 		const parentSessionFile = path.join(tempDir, "parent.jsonl");

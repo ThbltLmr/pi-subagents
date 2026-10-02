@@ -16,10 +16,13 @@ import {
 	mockAssistantMessage, readCall, readCallArgs, readAllCallArgs, makeExecutor,
 	installSingleExecutionHooks,
 } from "../support/single-execution-fixture.ts";
+import { waitForAsyncResultFile, waitForAsyncState } from "../support/async-execution-fixture.ts";
 import assert from "node:assert/strict";
-import * as fs from "node:fs";
+import fsDefault, * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	createEventBus,
 	makeAgentConfigs,
@@ -32,6 +35,8 @@ import { handleSubagentControlNotice } from "../../src/extension/control-notices
 import { discoverAgents } from "../../src/agents/agents.ts";
 import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
 import { INTERCOM_BRIDGE_MARKER, resolveIntercomSessionTarget } from "../../src/intercom/intercom-bridge.ts";
+import { stableJsonDigest } from "../../src/shared/launch-contract.ts";
+import { cleanupOldArtifacts } from "../../src/shared/artifacts.ts";
 import { createStructuredOutputRuntime } from "../../src/runs/shared/structured-output.ts";
 import {
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
@@ -41,9 +46,10 @@ import {
 	type SubagentDelegationResponse,
 	type SubagentDelegationStarted,
 } from "../../src/api/delegation.ts";
-import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, SUBAGENT_CONTROL_EVENT, TEMP_ARTIFACTS_DIR, type AsyncStatus, type ChildWatchdogProgress, type ControlEvent, type SubagentState } from "../../src/shared/types.ts";
+import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, SUBAGENT_CONTROL_EVENT, SUBAGENT_PROCESS_TERMINAL_EVENT, TEMP_ARTIFACTS_DIR, type AsyncStatus, type ChildWatchdogProgress, type ControlEvent, type SubagentState } from "../../src/shared/types.ts";
 import { ACTIVE_RUN_INDEX_DIR } from "../../src/runs/background/active-run-index.ts";
 import { encodeIndexSegment } from "../../src/runs/background/index-segment.ts";
+import { removeResultIndex, writeAsyncResultFile, writePendingAsyncResultFile } from "../../src/runs/background/result-files.ts";
 import { listAsyncRuns } from "../../src/runs/background/async-status.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
@@ -56,11 +62,12 @@ import { discardPreservedWorktrees } from "../../src/runs/shared/parallel-handof
 import { createWorktrees } from "../../src/runs/shared/worktree.ts";
 import { resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import { createResultWatcher } from "../../src/runs/background/result-watcher.ts";
-import { clearExclusions, recordModelFailure } from "../../src/runs/shared/model-exclusions.ts";
 import { createWorkflowChildPermit, workflowChildPermitConsumed } from "../../src/shared/workflow-child-permit.ts";
 import { toSubagentDelegationExecutionParams } from "../../src/slash/delegation-adapters.ts";
 import { registerWorkflowResource } from "../../src/api/workflow-resources.ts";
 import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
+import { appendWorkflowChildJournal, runtimeReplacedAbortReason, workflowChildFingerprint } from "../../src/workflows/workflow-reuse.ts";
+import { updateTerminalRunIndex } from "../../src/runs/background/terminal-run-index.ts";
 
 describe("single sync execution", { skip: !available ? "pi packages not available" : undefined }, () => {
 	installSingleExecutionHooks();
@@ -95,6 +102,65 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(updates.length, count, "no trailing timer after settlement");
 	});
 
+	it("launches an unnamed workflow child with a plain task contract", async () => {
+		mockPi.onCall({ output: "Review complete" });
+		const result = await makeExecutor([makeAgent("worker")]).execute("wf-plain-child", {
+			workflowScript: `const [child] = await runs.all([{ key: "r1", task: "Review", async: false }]); return child.ok ? "ok" : child.error;`,
+			async: false,
+		}, undefined, undefined, makeMinimalCtx(tempDir));
+		assert.equal(result.isError, undefined, JSON.stringify(result.content));
+		assert.match(JSON.stringify(result.content), /ok/);
+		assert.equal(mockPi.callCount(), 1);
+	});
+
+	for (const { name, asyncByDefault, id, reason } of [
+		{ name: "foreground", asyncByDefault: false, id: "workflow-foreground-sibling-stop", reason: /^Workflow child stopped: \*\*a\*\*\n[\s\S]*\nError: Subagent stopped before completion\.\nStatus: workflow finished$/ },
+		{ name: "async", asyncByDefault: true, id: "workflow-sibling-stop", reason: /^Workflow child stopped: \*\*a\*\*\n[\s\S]*\nError: Workflow stopped before async child completed\.\nStatus: workflow finished$/ },
+	]) {
+		it(`reports ${name} workflow siblings stopped by a failed script as stopped`, { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			mockPi.onCall({ matchArgIncludes: "Slow sibling", hangUntilAbort: true });
+			mockPi.onCall({ matchArgIncludes: "Fails at launch", createError: "launch failed" });
+			const sent: Array<{ customType?: string; content?: string }> = [];
+			const executor = makeExecutor([makeAgent("echo")], {}, asyncByDefault, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, undefined, (message: unknown) => sent.push(message as { customType?: string; content?: string }));
+			const launch = await executor.execute(id, {
+				async: true,
+				workflowScript: `await Promise.all([runs.run("a", { agent: "echo", task: "Slow sibling" }), runs.run("b", { agent: "echo", task: "Fails at launch" })]);`,
+			}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			assert.equal(launch.isError, undefined, launch.content[0]?.text ?? "workflow launch failed");
+			const notice = () => sent.find((message) => message.customType === "subagent-incremental-child-notify" && message.content?.includes("**a**"));
+			for (let attempt = 0; attempt < 250 && !notice(); attempt++) await new Promise((resolve) => setTimeout(resolve, 20));
+			assert.match(notice()?.content ?? "", reason);
+		});
+	}
+
+	it("emits successful async workflow child settlements without provider turns", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ matchArgIncludes: "Child A", output: "A done" });
+		mockPi.onCall({ matchArgIncludes: "Child B", output: "B done" });
+		const sent: Array<{ message: { customType?: string; content?: string }; options?: { triggerTurn?: boolean } }> = [];
+		const sendMessage = (message: unknown, options?: unknown) => {
+			sent.push({
+				message: message as { customType?: string; content?: string },
+				options: options as { triggerTurn?: boolean } | undefined,
+			});
+		};
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, undefined, sendMessage);
+		const launch = await executor.execute("workflow-child-wakes", {
+			async: true,
+			workflowScript: `return await runs.all([{ key: "a", agent: "echo", task: "Child A" }, { key: "b", agent: "echo", task: "Child B" }]);`,
+		}, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(launch.isError, undefined, launch.content[0]?.text ?? "workflow launch failed");
+
+		const childMessages = () => sent.filter(({ message }) => message.customType === "subagent-incremental-child-notify");
+		for (let attempt = 0; attempt < 250 && childMessages().length < 2; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.deepEqual(
+			childMessages().map(({ message }) => message.content?.split("\n", 1)[0]).sort(),
+			["Workflow child completed: **a**", "Workflow child completed: **b**"],
+		);
+		assert.ok(childMessages().every(({ options }) => options?.triggerTurn === false));
+	});
+
 	it("spawns agent and captures output", async () => {
 		mockPi.onCall({ output: "Hello from mock agent" });
 		const agents = makeAgentConfigs(["echo"]);
@@ -121,6 +187,17 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.sessionName, "echo: Say hello to the world");
 		assert.equal(result.progressSummary?.sessionName, "echo: Say hello to the world");
 		assert.equal(readCall().runtime?.sessionName, "echo: Say hello to the world");
+	});
+
+	it("addresses a nested child's supervisor by the parent child's intercom route, not its session name", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "ok" });
+		const parentChild = { intercomSessionName: "subagent-planner-run1-1" } as ChildRuntimeConfig;
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, parentChild);
+
+		const result = await executor.execute("nested-route", { agent: "echo", task: "Hi", intercomBridge: { mode: "always" } }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		assert.equal(readCall().runtime?.orchestratorTarget, "subagent-planner-run1-1");
 	});
 
 	it("rejects invalid foreground cwd before spawning Pi", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -191,6 +268,24 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.doesNotMatch(result.content[0]?.text ?? "", /Console:/);
 	});
 
+	it("binds each public foreground launch to its invoking model registry", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "A completed" });
+		mockPi.onCall({ output: "B completed" });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const ctxA = makeMinimalCtx(tempDir);
+		const ctxB = makeMinimalCtx(tempDir);
+
+		const resultA = await executor.executePublic("provider-owner-a", { label: "Run A", agent: "echo", task: "Run A", async: false }, new AbortController().signal, undefined, ctxA);
+		const resultB = await executor.executePublic("provider-owner-b", { label: "Run B", agent: "echo", task: "Run B", async: false }, new AbortController().signal, undefined, ctxB);
+
+		assert.equal(resultA.isError, undefined, resultA.content[0]?.text ?? "");
+		assert.equal(resultB.isError, undefined, resultB.content[0]?.text ?? "");
+		assert.equal(mockPi.sessions.length, 2);
+		assert.equal(mockPi.sessions[0]!.launch.parentProviderRegistry, ctxA.modelRegistry);
+		assert.equal(mockPi.sessions[1]!.launch.parentProviderRegistry, ctxB.modelRegistry);
+		assert.notEqual(mockPi.sessions[0]!.launch.parentProviderRegistry, mockPi.sessions[1]!.launch.parentProviderRegistry);
+	});
+
 	it("keeps public structured children alive when tool results backfill without execution_end", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({
 			steps: [
@@ -215,6 +310,96 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		assert.match(result.content[0]?.text ?? "", /PROBE_OK/);
 		assert.equal(result.details.results[0]?.timedOut, undefined);
+	});
+
+	it("preserves a blocked foreground delegated tool attempt without an execution-start event", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const blockedMessage = "Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.";
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					// A still-pending earlier call must not be attributed as the blocked tool.
+					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "notes.md" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "ordinary notes" }] } },
+				] },
+				{ jsonl: [events.assistantMessage("I could not read the required canary because bash was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-blocked",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Use bash to read the required canary.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 0, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, true);
+		assert.equal(child?.toolBudget?.blockedTool, "bash");
+		assert.equal(child?.finalOutput, "I could not read the required canary because bash was blocked.");
+
+		mockPi.onCall({ output: "No tool needed." });
+		const normal = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			"delegated-no-tool",
+			toSubagentDelegationExecutionParams({ ...request, requestId: "delegated-no-tool", task: "Answer without tools." }),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(normal.details?.results?.[0]?.toolBudgetBlocked, undefined);
+		assert.equal(normal.details?.results?.[0]?.finalOutput, "No tool needed.");
+	});
+
+	it("does not classify ordinary tool output that merely quotes the block message", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const quoted = `src/log.md:12:Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.`;
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "grep -rn 'Tool budget hard limit reached' src/" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: quoted }] } },
+					{ type: "tool_execution_end", toolName: "bash" },
+				] },
+				{ jsonl: [events.assistantMessage("The phrase appears in a log; nothing was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-quoted",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Search the repository for budget log lines.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 5, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, undefined);
+		assert.equal(child?.toolBudget?.outcome, "within-budget");
+		assert.equal(child?.finalOutput, "The phrase appears in a log; nothing was blocked.");
 	});
 
 	it("keeps public structured single-child calls foreground when async is disabled by default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -489,7 +674,7 @@ Answer only from the supplied synthetic text.
 		const task = "Return the plain result.";
 		const agentPath = path.join(tempDir, ".pi", "agents", `${agentName}.md`);
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge override probe\ntools:\n  - read\ncompletionGuard: false\n---\nAnswer from the task only.\n`, "utf-8");
+		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge override probe\ntools:\n  - read\n---\nAnswer from the task only.\n`, "utf-8");
 		const discovered = discoverAgents(tempDir).agents.find((agent) => agent.name === agentName);
 		assert.ok(discovered, "expected temporary agent definition to be discovered");
 		const intercomBridge = { mode: "off" as const };
@@ -529,7 +714,7 @@ Answer only from the supplied synthetic text.
 		const task = "Return the plain result.";
 		const agentPath = path.join(tempDir, ".pi", "agents", `${agentName}.md`);
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge template probe\ncompletionGuard: false\n---\nAnswer from the task only.\n`, "utf-8");
+		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge template probe\n---\nAnswer from the task only.\n`, "utf-8");
 		const discovered = discoverAgents(tempDir).agents.find((agent) => agent.name === agentName);
 		assert.ok(discovered, "expected temporary agent definition to be discovered");
 		const instructionFile = path.join(tempDir, "custom-bridge.md");
@@ -583,38 +768,6 @@ Answer only from the supplied synthetic text.
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		assert.doesNotMatch(readCallArgs().join("\n"), /This path is authoritative for this run/);
-	});
-
-	it("keeps escaped read-only delegate tasks from triggering the completion guard", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "The exact user-facing response" });
-		const task = [
-			"This is a read-only skill compliance scenario, not an implementation assignment.",
-			"Read the supplied skill and write the exact user-facing response.",
-			"Do not edit files.",
-			"Use a scenario that discusses selection for an implementation task or closeout of an implementation assignment.",
-		].join("\\n");
-		const result = await makeExecutor([makeAgent("delegate", {
-			tools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
-			inheritProjectContext: true,
-			systemPromptMode: "append",
-		})]).execute(
-			"workflow-read-only-delegate",
-			{
-				async: false,
-				acceptance: false,
-				preflight: { version: 1, coverage: "complete", lanes: [{ key: "main", mode: "review" }] },
-				workflowScript: `return runs.all([{ key: "main", agent: "delegate", task: ${JSON.stringify(task)} }]);`,
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		const child = (result.details as { results?: Array<{ exitCode?: number; error?: string; output?: string }> } | undefined)?.results?.[0];
-		assert.equal(child?.exitCode, 0);
-		assert.equal(child?.error, undefined);
-		assert.match(result.content[0]?.text ?? "", /The exact user-facing response/);
 	});
 
 	it("consumes one exact host-only workflow child permit before spawn", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -686,15 +839,6 @@ Answer only from the supplied synthetic text.
 		assert.match(wrongThenRight.content[0]?.text ?? "", /already consumed/);
 		assert.equal(workflowChildPermitConsumed(wrongThenRightPermit), true);
 		assert.equal(mockPi.callCount(), 3, "wrong-then-right must not spawn");
-		const fallback = await makeExecutor([makeAgent("echo", { model: "mock/primary", fallbackModels: ["mock/backup"] })]).executeDelegated(
-			"fallback",
-			{ async: false, workflowScript: script, delegatedWorkflowPermit: permitFor("fallback") },
-			new AbortController().signal,
-			undefined,
-			ctx,
-		);
-		assert.match(fallback.content[0]?.text ?? "", /does not support model fallback/);
-		assert.equal(mockPi.callCount(), 3);
 	});
 
 	it("resolves workflow child profile context from its agent default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -811,7 +955,7 @@ Answer only from the supplied synthetic text.
 		assert.equal(mockPi.callCount(), 1);
 	});
 
-	it("allows schedule.create to load its workflowScript target from a path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("allows schedule.create to load its workflow script target from a path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		let forwarded;
 		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, async (params) => {
 			forwarded = params;
@@ -821,7 +965,7 @@ Answer only from the supplied synthetic text.
 
 		const result = await executor.executePublic(
 			"schedule-create",
-			{ action: "schedule.create", id: "nightly", every: "1h", workflowScriptPath: "scheduled.js" },
+			{ action: "schedule.create", id: "nightly", every: "1h", workflow: "./scheduled.js", args: { task: "nightly review" } },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -830,13 +974,12 @@ Answer only from the supplied synthetic text.
 		assert.equal(result.isError, undefined);
 		assert.equal(result.content[0]?.text, "created");
 		assert.equal(forwarded?.workflowScript, "return runs.run('main', { agent: 'echo' })");
+		assert.deepEqual(forwarded?.args, { task: "nightly review" });
 	});
 
-	it("rejects a static spawn-budget mismatch before discovering or launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects a static spawn-budget mismatch before launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const before = fs.readdirSync(tempDir).sort();
-		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
-			throw new Error("spawn-budget validation must not discover or launch agents");
-		});
+		const executor = makeExecutor([makeAgent("echo")]);
 		const script = [
 			`const results = await runs.all([`,
 			`  { key: "a", agent: "echo", task: "A" },`,
@@ -857,18 +1000,18 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /validation failed before child launch; no children launched/);
-		assert.match(result.content[0]?.text ?? "", /'a', 'b', 'c', 'owner', 'review', 'owner-fix'/);
-		assert.match(result.content[0]?.text ?? "", /minimum required: 6; configured: 5/);
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { ok?: boolean; errors?: Array<{ kind?: string; message?: string }> };
+		assert.equal(payload.ok, false);
+		assert.equal(payload.errors?.[0]?.kind, "spawn-budget");
+		assert.match(payload.errors?.[0]?.message ?? "", /'a', 'b', 'c', 'owner', 'review', 'owner-fix'/);
+		assert.match(payload.errors?.[0]?.message ?? "", /minimum required: 6; configured: 5/);
 		assert.equal(mockPi.callCount(), 0);
 		assert.deepEqual(fs.readdirSync(tempDir).sort(), before);
 	});
 
 	it("validates workflow scripts without launching children or creating artifacts", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const before = fs.readdirSync(tempDir).sort();
-		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
-			throw new Error("validate must not discover or launch agents");
-		});
+		const executor = makeExecutor([makeAgent("echo")]);
 
 		const result = await executor.executePublic(
 			"offline-validation",
@@ -879,6 +1022,7 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
+		assert.equal(result.details.mode, "management");
 		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), {
 			ok: false,
 			errors: [{ message: "runs.run key must be 1-128 characters using letters, numbers, '.', '_' or '-', and start with a letter or number.", line: 1, column: 17 }],
@@ -916,6 +1060,29 @@ Answer only from the supplied synthetic text.
 		assert.match(JSON.stringify(offlinePreflightValidation.errors ?? []), /preflight\.lanes\[0\]\.key/);
 		assert.equal(mockPi.callCount(), 0);
 		assert.deepEqual(fs.readdirSync(tempDir).sort(), before);
+	});
+
+	it("rejects malformed public async workflows before creating run state", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
+			throw new Error("invalid workflows must not discover or launch agents");
+		});
+		const script = ["const value = 1;", "return (;"].join("\n");
+		const asyncDirsBefore = fs.existsSync(DIRS.async) ? fs.readdirSync(DIRS.async).sort() : [];
+		const callsBefore = mockPi.callCount();
+		const ctx = makeMinimalCtx(tempDir);
+		const validation = await executor.executePublic("malformed-validation", { action: "validate", workflowScript: script }, new AbortController().signal, undefined, ctx);
+		const result = await executor.executePublic("malformed-async", { workflowScript: script }, new AbortController().signal, undefined, ctx);
+
+		assert.equal(result.isError, true);
+		assert.equal(validation.details.mode, "management");
+		assert.equal(result.details.mode, "workflow");
+		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), JSON.parse(validation.content[0]?.text ?? "null"));
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { errors?: Array<{ line?: number; column?: number }> };
+		assert.deepEqual(payload.errors?.map(({ line, column }) => ({ line, column })), [{ line: 2, column: 9 }]);
+		assert.equal(mockPi.callCount(), callsBefore);
+		assert.equal(result.details.asyncId, undefined);
+		assert.equal(result.details.workflow?.receipt, undefined);
+		assert.deepEqual(fs.existsSync(DIRS.async) ? fs.readdirSync(DIRS.async).sort() : [], asyncDirsBefore);
 	});
 
 	it("rejects invalid public workflow acceptance defaults before mission or script work", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1052,7 +1219,7 @@ Answer only from the supplied synthetic text.
 		try {
 			for (const params of [
 				{ workflowScript: script },
-				{ workflowScriptPath: "raw-workflow.js" },
+				{ workflow: "./raw-workflow.js" },
 				{ workflow: "test.denied", workflowResourcePermit: {} },
 				{ workflow: "test.denied" },
 			]) {
@@ -1066,17 +1233,21 @@ Answer only from the supplied synthetic text.
 	});
 
 	it("denies host calls from raw public workflow scripts without resource authority", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const result = await makeExecutor([makeAgent("echo")]).executePublic(
-			"raw-host-denied",
-			{ workflowScript: `return await runs.host("ci", { kind: "command", command: "npm test", timeoutMs: 1000 });`, async: false },
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /runs\.host is unavailable/);
-		assert.equal(result.details.workflow?.resource, undefined);
-		assert.equal(result.details.workflow?.receipt?.resource, undefined);
+		const script = `return await runs.host("ci", { kind: "command", command: "npm test", timeoutMs: 1000 });`;
+		fs.writeFileSync(path.join(tempDir, "raw-host.js"), script);
+		for (const source of [{ workflowScript: script }, { workflow: "./raw-host.js" }]) {
+			const result = await makeExecutor([makeAgent("echo")]).executePublic(
+				"raw-host-denied",
+				{ ...source, args: { resource: "trusted", permit: true, hostCommands: ["npm test"] }, async: false },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /runs\.host is unavailable/);
+			assert.equal(result.details.workflow?.resource, undefined);
+			assert.equal(result.details.workflow?.receipt?.resource, undefined);
+		}
 		assert.equal(mockPi.callCount(), 0);
 	});
 
@@ -1285,13 +1456,14 @@ Answer only from the supplied synthetic text.
 		);
 		assert.ok(failed.details.asyncDir);
 		const failedStatusPath = path.join(failed.details.asyncDir!, "status.json");
-		let failedStatus: { state?: string; workflowGraph?: { nodes?: Array<{ hostStep?: { state?: string; reasonCode?: string; exitCode?: number | null } }> } } = {};
+		let failedStatus: Partial<Pick<AsyncStatus, "state" | "workflow" | "workflowGraph">> = {};
 		for (let attempt = 0; attempt < 100; attempt += 1) {
 			failedStatus = JSON.parse(fs.readFileSync(failedStatusPath, "utf8"));
 			if (failedStatus.state === "complete" || failedStatus.state === "failed") break;
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 		assert.equal(failedStatus.state, "failed");
+		assert.equal(failedStatus.workflow?.failureKind, "script");
 		assert.deepEqual(failedStatus.workflowGraph?.nodes?.map((node) => node.hostStep && { state: node.hostStep.state, reasonCode: node.hostStep.reasonCode, exitCode: node.hostStep.exitCode }), [{ state: "error", reasonCode: "command_failed", exitCode: 3 }]);
 		const failedReceipt = JSON.parse(fs.readFileSync(path.join(failed.details.asyncDir!, "workflow-receipt.json"), "utf8")) as { state?: string; hostSteps?: Array<{ state?: string; reasonCode?: string; exitCode?: number | null }> };
 		assert.equal(failedReceipt.state, "failed");
@@ -1301,17 +1473,18 @@ Answer only from the supplied synthetic text.
 		if (failed.details.asyncId) fs.rmSync(path.join(DIRS.results, `${failed.details.asyncId}.json`), { force: true });
 	});
 
-	it("loads workflowScriptPath from the request cwd for validation without launching", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("loads a workflow script path from the request cwd for validation without launching", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const requestCwd = path.join(tempDir, "request-cwd");
 		fs.mkdirSync(requestCwd);
 		fs.writeFileSync(path.join(requestCwd, "workflow.js"), `return runs.run("bad key", { agent: "echo" });`);
-		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
-			throw new Error("validate must not discover or launch agents");
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), (cwd) => {
+			assert.equal(cwd, requestCwd);
+			return [makeAgent("echo")];
 		});
 
 		const result = await executor.executePublic(
 			"file-validation",
-			{ action: "validate", cwd: "request-cwd", workflowScriptPath: "workflow.js" },
+			{ action: "validate", cwd: "request-cwd", workflow: "./workflow.js", args: { task: "review" } },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -1325,32 +1498,139 @@ Answer only from the supplied synthetic text.
 		assert.equal(mockPi.callCount(), 0);
 	});
 
-	it("reports missing and empty workflowScriptPath files before validation", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("validate reports workflow args errors beside script errors without launching (#2608)", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const workflowScript = `return runs.run("bad key", { agent: "echo" });`;
+		const tooManyFields = Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`field${index}`, "x"]));
+		const oversize = { a: "x".repeat(9000), b: "y".repeat(9000) };
+		const scriptError = { message: "runs.run key must be 1-128 characters using letters, numbers, '.', '_' or '-', and start with a letter or number.", line: 1, column: 17 };
+
+		for (const [args, argsError] of [[tooManyFields, "workflow args contains too many fields."], [oversize, "workflow args exceed 16384 bytes."]] as const) {
+			const result = await executor.executePublic("args-validation", { action: "validate", workflowScript, args }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+			assert.equal(result.isError, true);
+			assert.equal(result.details.mode, "management");
+			assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), { ok: false, errors: [scriptError, { message: argsError }] });
+		}
+		const argsOnly = await executor.executePublic("args-only-validation", { action: "validate", workflowScript: "return 1;", args: oversize }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.deepEqual(JSON.parse(argsOnly.content[0]?.text ?? "null"), { ok: false, errors: [{ message: "workflow args exceed 16384 bytes." }] });
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("reports missing and empty workflow script files before validation", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		fs.writeFileSync(path.join(tempDir, "empty.js"), " \n");
 		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
 			throw new Error("file input errors must not discover or launch agents");
 		});
 
-		const missing = await executor.executePublic("missing-file", { action: "validate", workflowScriptPath: "missing.js" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const missing = await executor.executePublic("missing-file", { action: "validate", workflow: "./missing.js" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(missing.isError, true);
-		assert.match(missing.content[0]?.text ?? "", /Failed to read workflowScriptPath.*missing\.js/);
+		assert.match(missing.content[0]?.text ?? "", /Failed to read workflow script.*missing\.js/);
 		assert.doesNotMatch(missing.content[0]?.text ?? "", /validation failed|valid JavaScript/);
 
-		const empty = await executor.executePublic("empty-file", { action: "validate", workflowScriptPath: "empty.js" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const empty = await executor.executePublic("empty-file", { action: "validate", workflow: "./empty.js" }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
 		assert.equal(empty.isError, true);
-		assert.match(empty.content[0]?.text ?? "", /workflowScriptPath file .*empty\.js.* is empty/);
+		assert.match(empty.content[0]?.text ?? "", /Workflow script file .*empty\.js.* is empty/);
+
+		// Seen live: a model put the script itself in the workflow string.
+		const scriptText = await executor.executePublic("script-text", { workflow: "return 1", async: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(scriptText.isError, true);
+		assert.match(scriptText.content[0]?.text ?? "", /write it in one ```js workflow block in the same reply and call subagent\(\{ workflow: true \}\)/);
 		assert.doesNotMatch(empty.content[0]?.text ?? "", /validation failed|valid JavaScript/);
 		assert.equal(mockPi.callCount(), 0);
 	});
 
-	it("executes a workflow loaded from workflowScriptPath", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects invalid raw workflow arguments before reading a script path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const result = await makeExecutor([makeAgent("echo")]).executePublic(
+			"invalid-workflow-args",
+			{ workflow: "./missing.js", args: { task: "" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /args\.task must not be empty/);
+		assert.doesNotMatch(result.content[0]?.text ?? "", /missing\.js/);
+	});
+
+	it("executes the ```js workflow block from the reply that issued the call", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "reply workflow" });
+		const ctx = makeMinimalCtx(tempDir);
+		const reply = {
+			type: "message",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "Plan:\n```js workflow\nconst child = await runs.run(\"main\", { agent: \"echo\", task: args.task });\nreturn { task: args.task, child: child.output };\n```" },
+					{ type: "toolCall", id: "call-reply", name: "subagent", arguments: { workflow: true } },
+				],
+			},
+		};
+		const result = await makeExecutor([makeAgent("echo")]).executePublic(
+			"call-reply",
+			{ workflow: true, args: { task: "from reply" }, async: false },
+			new AbortController().signal,
+			undefined,
+			{ ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [reply] } },
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "reply workflow failed");
+		assert.deepEqual(result.details.workflow?.value, { task: "from reply", child: "reply workflow" });
+		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("treats workflow: \"true\" from MCP clients as the reply block, not a resource named 'true' (#2600)", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "reply workflow" });
+		const ctx = makeMinimalCtx(tempDir);
+		const reply = {
+			type: "message",
+			message: {
+				role: "assistant",
+				content: [
+					{ type: "text", text: "```js workflow\nconst child = await runs.run(\"main\", { agent: \"echo\", task: args.task });\nreturn child.output;\n```" },
+					{ type: "toolCall", id: "call-string-true", name: "subagent", arguments: { workflow: "true" } },
+				],
+			},
+		};
+		const replyCtx = { ...ctx, sessionManager: { ...ctx.sessionManager, getBranch: () => [reply] } };
+		const executor = makeExecutor([makeAgent("echo")]);
+
+		const validation = await executor.executePublic("call-string-true", { action: "validate", workflow: "true", args: { task: "from reply" } }, new AbortController().signal, undefined, replyCtx);
+		assert.equal(validation.isError, undefined, validation.content[0]?.text ?? "reply workflow validation failed");
+
+		const result = await executor.executePublic("call-string-true", { workflow: "true", args: { task: "from reply" }, async: false }, new AbortController().signal, undefined, replyCtx);
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "reply workflow failed");
+		assert.equal(result.details.workflow?.value, "reply workflow");
+		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("tags each foreground workflow result with its child run id", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "first" });
+		mockPi.onCall({ output: "second" });
+		const result = await makeExecutor([makeAgent("echo")]).execute(
+			"workflow-result-run-ids",
+			{
+				async: false,
+				workflowScript: `const a = await runs.run("a", { agent: "echo", task: "A" }); const b = await runs.run("b", { agent: "echo", task: "B" }); return { a: a.runId, b: b.runId };`,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		const value = result.details.workflow?.value as { a?: string; b?: string };
+		assert.ok(value.a && value.b && value.a !== value.b);
+		assert.deepEqual(result.details.results.map((entry) => ({ key: entry.workflowKey, runId: entry.runId })), [{ key: "a", runId: value.a }, { key: "b", runId: value.b }]);
+	});
+
+	it("executes a workflow loaded from a script path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		fs.writeFileSync(path.join(tempDir, "workflow.js"), `return runs.run("main", { agent: "echo", task: "from file" });`);
 		mockPi.onCall({ output: "loaded workflow" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
 		const result = await executor.executePublic(
 			"file-execution",
-			{ async: false, workflowScriptPath: path.join(tempDir, "workflow.js"), preflight: { version: 1, coverage: "complete", lanes: [{ key: "main", mode: "mutation" }] } },
+			{ async: false, workflow: path.join(tempDir, "workflow.js"), preflight: { version: 1, coverage: "complete", lanes: [{ key: "main", mode: "mutation" }] } },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
@@ -1358,7 +1638,50 @@ Answer only from the supplied synthetic text.
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "file workflow failed");
 		assert.deepEqual(result.details.preflight, { version: 1, coverage: "complete", lanes: [{ key: "main", mode: "mutation" }] });
+		assert.deepEqual(result.details.workflow?.args, {});
+		assert.equal(result.details.workflow?.argsDigest, stableJsonDigest({}));
 		assert.equal(mockPi.callCount(), 1);
+	});
+
+	it("passes normalized arguments to inline and file-backed workflow sandboxes with bound receipt evidence", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const script = `const child = await runs.run("main", { agent: "echo", task: args.task }); return { input: args, child: child.output };`;
+		fs.writeFileSync(path.join(tempDir, "parameterized-workflow.js"), script);
+		const args = { task: "from args", options: { labels: ["one"] } };
+		const digests: string[] = [];
+
+		for (const { source, invocationArgs } of [
+			{ source: { workflowScript: script }, invocationArgs: args },
+			{ source: { workflow: "./parameterized-workflow.js" }, invocationArgs: { options: { labels: ["one"] }, task: "from args" } },
+			{ source: { workflowScript: script }, invocationArgs: { task: "from args", options: { labels: ["two"] } } },
+		]) {
+			mockPi.onCall({ output: "parameterized workflow" });
+			const result = await makeExecutor([makeAgent("echo")]).executePublic(
+				"parameterized-workflow",
+				{ ...source, args: invocationArgs, async: false },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+
+			assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+			assert.deepEqual(result.details.workflow?.value, { input: invocationArgs, child: "parameterized workflow" });
+			assert.deepEqual(result.details.workflow?.args, invocationArgs);
+			assert.equal(result.details.workflow?.argsDigest, stableJsonDigest(invocationArgs));
+			assert.equal(result.details.workflow?.receipt?.argsDigest, stableJsonDigest(invocationArgs));
+			digests.push(result.details.workflow!.argsDigest!);
+		}
+		assert.equal(digests[0], digests[1], "object key order must not affect the canonical digest");
+		assert.notEqual(digests[1], digests[2], "nested argument changes must affect the canonical digest");
+		const failed = await makeExecutor([makeAgent("echo")]).executePublic(
+			"parameterized-workflow-failure",
+			{ workflowScript: `throw new Error("expected failure");`, args, async: false },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(failed.isError, true);
+		assert.deepEqual(failed.details.workflow?.args, args);
+		assert.equal(failed.details.workflow?.receipt?.argsDigest, stableJsonDigest(args));
 	});
 
 	it("starts workflow scripts asynchronously with a portable internal run id", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1368,6 +1691,7 @@ Answer only from the supplied synthetic text.
 		const workflowCwd = path.join(tempDir, "workflow-cwd");
 		fs.mkdirSync(workflowCwd);
 		const toolCallId = "call_demo|fc_demo";
+		const workflowArgs = { batch: "argument-sentinel-2233" };
 		const context = makeMinimalCtx(tempDir);
 		context.sessionManager.getSessionFile = () => path.join(tempDir, "parent-session.jsonl");
 
@@ -1375,6 +1699,7 @@ Answer only from the supplied synthetic text.
 			toolCallId,
 			{
 				cwd: workflowCwd,
+				args: workflowArgs,
 				workflowScript: `emit("starting"); await runs.run("work", { agent: "helper", label: "Run async child", phase: "Execution", task: "Async work" }); return { answer: 42 };`,
 				preflight: { version: 1, coverage: "complete", lanes: [{ key: "work", mode: "mutation", claims: ["src/work.ts"], expectedOutput: "child report" }] },
 				mission: { summary: "Review the active backlog", labels: ["github-backlog", "review"] },
@@ -1402,13 +1727,13 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.existsSync(path.join(DIRS.async, toolCallId)), false);
 		assert.match(result.content[0]?.text ?? "", /Preflight: v1 · complete · 1 lane/);
 		assert.match(result.content[0]?.text ?? "", /Async workflow/);
-		const statusPath = path.join(result.details.asyncDir!, "status.json");
-		let status: { runId?: string; toolCallId?: string; cwd?: string; sessionRoot?: string; state?: string; preflight?: unknown; steps?: Array<{ agent?: string; sessionName?: string; label?: string; phase?: string; workflowKey?: string; parentWorkflowRunId?: string; async?: boolean }>; workflow?: { value?: unknown; emits?: unknown[]; trace?: Array<{ key?: string; agent?: string; label?: string; phase?: string; state?: string }> } } = {};
-		for (let attempt = 0; attempt < 300; attempt++) {
-			status = JSON.parse(fs.readFileSync(statusPath, "utf-8"));
-			if (status.state === "complete" || status.state === "failed") break;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
+		assert.doesNotMatch(result.content[0]?.text ?? "", /argument-sentinel-2233/);
+		type WorkflowStatus = { runId?: string; toolCallId?: string; cwd?: string; sessionRoot?: string; state?: string; preflight?: unknown; steps?: Array<{ agent?: string; sessionName?: string; label?: string; phase?: string; workflowKey?: string; parentWorkflowRunId?: string; async?: boolean }>; workflow?: { value?: unknown; args?: Record<string, unknown>; argsDigest?: string; emits?: unknown[]; trace?: Array<{ key?: string; agent?: string; label?: string; phase?: string; state?: string }> } };
+		const status = await waitForAsyncState(
+			workflowRunId,
+			(candidate) => ["complete", "failed", "partial", "paused", "stopped", "rejected"].includes(candidate.state ?? ""),
+			60_000,
+		) as WorkflowStatus;
 		assert.equal(status.state, "complete");
 		assert.equal(status.runId, workflowRunId);
 		assert.equal(status.toolCallId, toolCallId);
@@ -1423,6 +1748,7 @@ Answer only from the supplied synthetic text.
 			context,
 		);
 		assert.match(statusResult.content[0]?.text ?? "", /Plan: 1 lane · work/);
+		assert.doesNotMatch(statusResult.content[0]?.text ?? "", /argument-sentinel-2233/);
 		assert.doesNotMatch(statusResult.content[0]?.text ?? "", /key \| mode \| decision \| claims \| expected output \| independence/);
 		assert.deepEqual(statusResult.details.preflight, { version: 1, coverage: "complete", lanes: [{ key: "work", mode: "mutation", claims: ["src/work.ts"], expectedOutput: "child report" }] });
 		assert.equal(status.steps?.length, 1);
@@ -1432,14 +1758,18 @@ Answer only from the supplied synthetic text.
 		assert.ok(status.steps?.every((step) => step.parentWorkflowRunId === workflowRunId));
 		assert.equal(status.steps?.[0]?.async, true);
 		assert.deepEqual(status.workflow?.value, { answer: 42 });
+		assert.deepEqual(status.workflow?.args, workflowArgs);
+		assert.equal(status.workflow?.argsDigest, stableJsonDigest(workflowArgs));
 		assert.deepEqual(status.workflow?.emits, ["starting"]);
 		assert.equal(mockPi.callCount(), 1);
 		assert.ok(status.workflow?.trace?.some((entry) => entry.key === "work" && entry.agent === "echo" && entry.label === "Run async child" && entry.phase === "Execution" && entry.state === "completed"));
-		const traceEvents = fs.readFileSync(path.join(result.details.asyncDir!, "events.jsonl"), "utf-8")
+		const workflowEvents = fs.readFileSync(path.join(result.details.asyncDir!, "events.jsonl"), "utf-8")
 			.trim()
 			.split("\n")
-			.map((line) => JSON.parse(line) as { type?: string; trace?: Array<{ key?: string; state?: string }> })
-			.filter((event) => event.type === "subagent.workflow.trace");
+			.map((line) => JSON.parse(line) as { type?: string; argsDigest?: string; trace?: Array<{ key?: string; state?: string }> });
+		assert.equal(workflowEvents.find((event) => event.type === "subagent.workflow.started")?.argsDigest, stableJsonDigest(workflowArgs));
+		assert.equal(workflowEvents.find((event) => event.type === "subagent.workflow.completed")?.argsDigest, stableJsonDigest(workflowArgs));
+		const traceEvents = workflowEvents.filter((event) => event.type === "subagent.workflow.trace");
 		assert.equal(traceEvents.length, 2);
 		assert.deepEqual(traceEvents[0]?.trace?.map(({ key, state }) => ({ key, state })), [{ key: "work", state: "started" }]);
 		assert.deepEqual(traceEvents[1]?.trace?.map(({ key, state }) => ({ key, state })), [
@@ -1447,7 +1777,7 @@ Answer only from the supplied synthetic text.
 			{ key: "work", state: "completed" },
 		]);
 		const resultPath = path.join(DIRS.results, `${workflowRunId}.json`);
-		const persistedResult = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as { id?: string; runId?: string; toolCallId?: string; agent?: string; cwd?: string; summary?: string; workflow?: { value?: unknown; receipt?: unknown }; workflowReceipt?: { path?: string; receipt?: { workflowRunId?: string; entries?: Record<string, { key?: string; agent?: string; latestRunId?: string; resumability?: { state?: string; reason?: string }; continuation?: { runIds?: string[] } }> } }; results?: Array<{ agent?: string; sessionName?: string; workflowKey?: string; runId?: string; output?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number } }> };
+		const persistedResult = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as { id?: string; runId?: string; toolCallId?: string; agent?: string; cwd?: string; summary?: string; workflow?: { value?: unknown; args?: Record<string, unknown>; argsDigest?: string; receipt?: unknown }; workflowReceipt?: { path?: string; receipt?: { workflowRunId?: string; argsDigest?: string; entries?: Record<string, { key?: string; agent?: string; latestRunId?: string; resumability?: { state?: string; reason?: string }; continuation?: { runIds?: string[] } }> } }; results?: Array<{ agent?: string; sessionName?: string; workflowKey?: string; runId?: string; output?: string; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number } }> };
 		assert.equal(persistedResult.id, workflowRunId);
 		assert.equal(persistedResult.runId, workflowRunId);
 		assert.equal(persistedResult.toolCallId, toolCallId);
@@ -1461,9 +1791,12 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.existsSync(path.join(result.details.asyncDir!, "control", "workflow-foreground")), false);
 		assert.match(persistedResult.summary ?? "", /Return: \{\n  "answer": 42\n\}/);
 		assert.deepEqual(persistedResult.workflow?.value, { answer: 42 });
+		assert.deepEqual(persistedResult.workflow?.args, workflowArgs);
+		assert.equal(persistedResult.workflow?.argsDigest, stableJsonDigest(workflowArgs));
 		assert.equal(persistedResult.workflow?.receipt, undefined, "status/result workflow projection must stay receipt-free");
 		assert.equal(persistedResult.workflowReceipt?.path, path.join(result.details.asyncDir!, "workflow-receipt.json"));
 		assert.equal(persistedResult.workflowReceipt?.receipt?.workflowRunId, workflowRunId);
+		assert.equal(persistedResult.workflowReceipt?.receipt?.argsDigest, stableJsonDigest(workflowArgs));
 		assert.equal(persistedResult.workflowReceipt?.receipt?.entries?.work?.key, "work");
 		assert.equal(persistedResult.workflowReceipt?.receipt?.entries?.work?.agent, "echo");
 		assert.equal(persistedResult.workflowReceipt?.receipt?.entries?.work?.latestRunId, persistedResult.results?.[0]?.runId);
@@ -1510,7 +1843,7 @@ Answer only from the supplied synthetic text.
 		assert.equal(childCompleted, true, "expected the child to settle before simulating session cleanup");
 		const controller = workflowControllers.get(workflowRunId);
 		assert.ok(controller, "expected a live workflow controller before simulated cleanup");
-		controller.abort(new Error("Workflow stopped because the extension session was replaced or reloaded."));
+		controller.abort(runtimeReplacedAbortReason());
 		workflowControllers.clear();
 		asyncJobs.clear();
 
@@ -1528,6 +1861,277 @@ Answer only from the supplied synthetic text.
 		assert.deepEqual(result.workflow?.value, finalStatus.workflow?.value);
 		fs.rmSync(asyncDir, { recursive: true, force: true });
 		fs.rmSync(resultPath, { force: true });
+	});
+
+	describe("relaunching a runtime-replaced workflow", () => {
+		const terminalStates = ["complete", "failed", "partial", "paused", "stopped", "rejected"];
+		// SAFETY: the executor and runner write these status.json files from AsyncStatus values.
+		const readStatusFile = (runId: string) => JSON.parse(fs.readFileSync(path.join(DIRS.async, runId, "status.json"), "utf-8")) as AsyncStatus;
+		const setup = () => {
+			const workflowControllers = new Map<string, AbortController>();
+			const executor = makeExecutor([makeAgent("echo"), makeAgent("bg", { defaultAsync: true })], {}, false, undefined, true, new Map(), workflowControllers, undefined, undefined, undefined, undefined, () => {});
+			const launch = async (params: Record<string, unknown>): Promise<string> => {
+				const started = await executor.execute(`workflow-reuse-${Date.now()}-${Math.random().toString(16).slice(2)}`, { async: true, mission: false, ...params }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+				assert.equal(started.isError, undefined, started.content[0]?.text ?? "workflow launch failed");
+				return started.details.asyncId!;
+			};
+			const waitFor = async (runId: string, predicate: (status: AsyncStatus) => boolean) => {
+				await waitForAsyncState(runId, () => predicate(readStatusFile(runId)), 30_000);
+				return readStatusFile(runId);
+			};
+			const settled = async (runId: string) => {
+				const status = await waitFor(runId, (candidate) => terminalStates.includes(candidate.state));
+				await waitForAsyncResultFile(runId, 30_000);
+				return status;
+			};
+			const stopWhenStage2Starts = async (runId: string, reason: Error, ready = (status: AsyncStatus) => status.workflow?.trace.some((entry) => entry.key === "stage2" && entry.state === "started") ?? false) => {
+				await waitFor(runId, ready);
+				workflowControllers.get(runId)!.abort(reason);
+				return await settled(runId);
+			};
+			const stopAction = (target: { id: string } | { dir: string }, sessionId?: string) => {
+				const ctx = makeMinimalCtx(tempDir);
+				if (sessionId) ctx.sessionManager.getSessionId = () => sessionId;
+				return executor.execute(`workflow-stop-${Date.now()}`, { action: "stop", ...target }, new AbortController().signal, undefined, ctx);
+			};
+			return { launch, waitFor, settled, stopWhenStage2Starts, stopAction };
+		};
+		const resultFileText = (runId: string) => fs.readFileSync(path.join(DIRS.results, `${runId}.json`), "utf-8");
+
+		it("records the stop cause and script digest, then reuses the finished stage on relaunch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `reuse-${Date.now()}`;
+			const script = `const first = await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); const second = await runs.run("stage2", { agent: "echo", task: "Stage two ${nonce}" }); return { first: first.output, second: second.output, reused: first.reused === true };`;
+			const args = { nonce };
+			const { launch, settled, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one done" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, hangUntilAbort: true });
+			const firstId = await launch({ workflowScript: script, args });
+			const stopped = await stopWhenStage2Starts(firstId, runtimeReplacedAbortReason());
+			assert.equal(stopped.state, "stopped");
+			assert.equal(stopped.workflow?.stopCause, "runtime-replaced");
+			assert.equal(stopped.workflow?.scriptDigest, createHash("sha256").update(script).digest("hex"));
+			assert.match(resultFileText(firstId), /Async children that were still running keep running; relaunch the same workflow script with the same args to reuse finished children and re-attach to running ones\./);
+			const stage1RunId = stopped.steps?.find((step) => step.workflowKey === "stage1")?.runId;
+			assert.ok(stage1RunId);
+			const callsAfterStop = mockPi.callCount();
+
+			for (const variant of [{ workflowScript: script, args: { nonce, changed: true } }, { workflowScript: `${script}\n// changed`, args }]) {
+				mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one again" });
+				mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, output: "stage two done" });
+				const status = await settled(await launch(variant));
+				assert.equal(status.state, "complete");
+				assert.equal(status.workflow?.reusedFrom, undefined);
+			}
+			assert.equal(mockPi.callCount(), callsAfterStop + 4, "different args or script must launch every child");
+
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, output: "stage two done" });
+			const relaunched = await settled(await launch({ workflowScript: script, args }));
+			assert.equal(relaunched.state, "complete");
+			assert.equal(mockPi.callCount(), callsAfterStop + 5, "only stage2 launches");
+			assert.equal(relaunched.workflow?.reusedFrom, firstId);
+			assert.deepEqual(relaunched.workflow?.value, { first: "stage one done", second: "stage two done", reused: true });
+			assert.deepEqual(relaunched.steps?.map(({ workflowKey, runId, reused }) => ({ workflowKey, runId: workflowKey === "stage1" ? runId : undefined, reused })), [
+				{ workflowKey: "stage1", runId: stage1RunId, reused: true },
+				{ workflowKey: "stage2", runId: undefined, reused: undefined },
+			]);
+			assert.ok(relaunched.workflow?.trace.some((entry) => entry.key === "stage1" && entry.state === "completed" && entry.reused === true));
+		});
+
+		it("relaunches failed children, and a user stop records no stop cause and ends reuse", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `reuse-failed-${Date.now()}`;
+			const script = `let first = null; try { first = await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); } catch {} const second = await runs.run("stage2", { agent: "echo", task: "Stage two ${nonce}" }); return { first: first?.output ?? null, second: second.output };`;
+			const args = { nonce };
+			const { launch, settled, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, exitCode: 1, stderr: "stage one broke" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, hangUntilAbort: true });
+			const firstId = await launch({ workflowScript: script, args });
+			assert.equal((await stopWhenStage2Starts(firstId, runtimeReplacedAbortReason())).workflow?.stopCause, "runtime-replaced");
+			const callsAfterStop = mockPi.callCount();
+
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one fixed" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, hangUntilAbort: true });
+			const secondId = await launch({ workflowScript: script, args });
+			const userStopped = await stopWhenStage2Starts(secondId, new Error("Stopped by user."));
+			assert.equal(mockPi.callCount(), callsAfterStop + 2, "the failed stage1 launches again");
+			assert.equal(userStopped.workflow?.reusedFrom, firstId);
+			assert.equal(userStopped.workflow?.stopCause, undefined);
+			assert.doesNotMatch(resultFileText(secondId), /relaunch the same workflow script/);
+
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one fixed" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, output: "stage two done" });
+			const third = await settled(await launch({ workflowScript: script, args }));
+			assert.equal(third.state, "complete");
+			assert.equal(third.workflow?.reusedFrom, undefined, "the newest same-script run was user-stopped");
+			assert.equal(mockPi.callCount(), callsAfterStop + 4);
+		});
+
+		const awaitedStage2Ready = (status: AsyncStatus) => Boolean(status.steps?.find((step) => step.workflowKey === "stage2" && step.async === true)?.runId);
+
+		it("keeps a running awaited async child alive and re-attaches to it on relaunch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `reattach-${Date.now()}`;
+			const release = path.join(tempDir, `${nonce}.release`);
+			const script = `const first = await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); const second = await runs.run("stage2", { agent: "bg", task: "Stage two ${nonce}" }); const third = await runs.run("stage3", { agent: "echo", task: "Stage three ${nonce}" }); return { first: first.output, second: second.output, secondReused: second.reused === true, third: third.output };`;
+			const args = { nonce };
+			const { launch, waitFor, settled, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one done" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, waitForPath: release, output: "stage two done" });
+			const callsBefore = mockPi.callCount();
+			const firstId = await launch({ workflowScript: script, args });
+			const stopped = await stopWhenStage2Starts(firstId, runtimeReplacedAbortReason(), awaitedStage2Ready);
+			assert.equal(stopped.workflow?.stopCause, "runtime-replaced");
+			const stage2RunId = stopped.steps?.find((step) => step.workflowKey === "stage2")?.runId;
+			assert.ok(stage2RunId);
+			for (const deadline = Date.now() + 15_000; mockPi.callCount() < callsBefore + 2 && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+			assert.equal(mockPi.callCount(), callsBefore + 2, "the awaited child's runner starts its prompt after the abort");
+			assert.equal(readStatusFile(stage2RunId).state, "running", "a runtime-replaced abort must not stop the awaited child");
+
+			mockPi.onCall({ matchArgIncludes: `Stage three ${nonce}`, output: "stage three done" });
+			const relaunchId = await launch({ workflowScript: script, args });
+			await waitFor(relaunchId, (status) => status.workflow?.trace.some((entry) => entry.key === "stage2" && entry.state === "started") ?? false);
+			fs.writeFileSync(release, "go");
+			const relaunched = await settled(relaunchId);
+			assert.equal(relaunched.state, "complete", relaunched.error);
+			assert.equal(mockPi.callCount(), callsBefore + 3, "only stage3 launches after the relaunch");
+			assert.equal(relaunched.workflow?.reusedFrom, firstId);
+			assert.deepEqual(relaunched.workflow?.value, { first: "stage one done", second: "stage two done", secondReused: true, third: "stage three done" });
+			assert.deepEqual(relaunched.steps?.map(({ workflowKey, reused }) => ({ workflowKey, reused })), [
+				{ workflowKey: "stage1", reused: true },
+				{ workflowKey: "stage2", reused: true },
+				{ workflowKey: "stage3", reused: undefined },
+			]);
+			assert.equal(relaunched.steps?.[1]?.runId, stage2RunId);
+			assert.equal(fs.existsSync(path.join(DIRS.async, stage2RunId, "workflow-result.json")), false, "the relaunch consumes the awaited result like the normal path");
+		});
+
+		it("launches fresh when a re-attached child fails after the reload", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `reattach-failed-${Date.now()}`;
+			const release = path.join(tempDir, `${nonce}.release`);
+			const script = `await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); let second = null; try { second = await runs.run("stage2", { agent: "bg", task: "Stage two ${nonce}" }); } catch {} return { second: second?.output ?? null, secondReused: second?.reused === true };`;
+			const args = { nonce };
+			const { launch, settled, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one done" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, waitForPath: release, exitCode: 1, stderr: "stage two broke" });
+			const callsBefore = mockPi.callCount();
+			const firstId = await launch({ workflowScript: script, args });
+			const stage2RunId = (await stopWhenStage2Starts(firstId, runtimeReplacedAbortReason(), awaitedStage2Ready)).steps?.find((step) => step.workflowKey === "stage2")?.runId;
+			assert.ok(stage2RunId);
+			for (const deadline = Date.now() + 15_000; mockPi.callCount() < callsBefore + 2 && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+			fs.writeFileSync(release, "go");
+			assert.equal((await waitForAsyncState(stage2RunId, (status) => terminalStates.includes(status.state ?? ""), 30_000)).state, "failed");
+
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, output: "stage two fresh" });
+			const relaunched = await settled(await launch({ workflowScript: script, args }));
+			assert.equal(relaunched.state, "complete", relaunched.error);
+			assert.equal(mockPi.callCount(), callsBefore + 3, "the failed stage2 launches again");
+			assert.deepEqual(relaunched.workflow?.value, { second: "stage two fresh", secondReused: false });
+			assert.equal(relaunched.steps?.find((step) => step.workflowKey === "stage2")?.reused, undefined);
+		});
+
+		it("still stops a running awaited async child when the user stops the workflow", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `user-stop-awaited-${Date.now()}`;
+			const { launch, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one done" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, waitForPath: path.join(tempDir, `${nonce}.never`), output: "never" });
+			const runId = await launch({ workflowScript: `await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); await runs.run("stage2", { agent: "bg", task: "Stage two ${nonce}" });` });
+			const stopped = await stopWhenStage2Starts(runId, new Error("Stopped by user."), awaitedStage2Ready);
+			const stage2RunId = stopped.steps?.find((step) => step.workflowKey === "stage2")?.runId;
+			assert.ok(stage2RunId);
+			const child = await waitForAsyncState(stage2RunId, (status) => terminalStates.includes(status.state ?? ""), 30_000);
+			assert.equal(child.state, "stopped");
+		});
+
+		it("stops the workflow and its async and foreground children when the stop action names it by id prefix or dir", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const { launch, waitFor, settled, stopAction } = setup();
+			for (const form of ["prefix", "dir"] as const) {
+				const nonce = `stop-action-${form}-${Date.now()}`;
+				mockPi.onCall({ matchArgIncludes: `Async child ${nonce}`, waitForPath: path.join(tempDir, `${nonce}.never`), output: "never" });
+				mockPi.onCall({ matchArgIncludes: `Foreground child ${nonce}`, hangUntilAbort: true });
+				const runId = await launch({ workflowScript: `await Promise.all([runs.run("bg", { agent: "bg", task: "Async child ${nonce}" }), runs.run("fg", { agent: "echo", task: "Foreground child ${nonce}" })]);` });
+				const running = await waitFor(runId, (status) => Boolean(status.steps?.find((step) => step.workflowKey === "bg" && step.async === true)?.runId)
+					&& status.steps?.find((step) => step.workflowKey === "fg")?.status === "running");
+				const bgRunId = running.steps?.find((step) => step.workflowKey === "bg")?.runId;
+				assert.ok(bgRunId);
+
+				const target = form === "prefix" ? { id: runId.slice(0, 8) } : { dir: path.join(DIRS.async, runId) };
+				const foreign = await stopAction(target, "other-session");
+				assert.equal(foreign.isError, true, `${form}: another session cannot stop the workflow`);
+				assert.equal(readStatusFile(runId).state, "running", form);
+				const result = await stopAction(target);
+				assert.equal(result.isError, undefined, result.content[0]?.text);
+				assert.equal(result.content[0]?.text, `Stop requested for async workflow ${runId}.`, form);
+				const stopped = await settled(runId);
+				assert.equal(stopped.state, "stopped", form);
+				assert.equal(stopped.steps?.find((step) => step.workflowKey === "fg")?.status, "stopped", form);
+				assert.doesNotMatch(resultFileText(runId), /relaunch the same workflow script/, form);
+				assert.equal((await waitForAsyncState(bgRunId, (status) => terminalStates.includes(status.state ?? ""), 30_000)).state, "stopped", form);
+				const workflowStopRequests = path.join(DIRS.async, runId, "control", "stop-requests");
+				assert.deepEqual(fs.existsSync(workflowStopRequests) ? fs.readdirSync(workflowStopRequests) : [], [], `${form}: no unread stop request is left for the in-process workflow`);
+			}
+		});
+
+		it("stops a re-attached child when the user stops the relaunched workflow", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `reattach-user-stop-${Date.now()}`;
+			const script = `await runs.run("stage1", { agent: "echo", task: "Stage one ${nonce}" }); await runs.run("stage2", { agent: "bg", task: "Stage two ${nonce}" });`;
+			const args = { nonce };
+			const { launch, stopWhenStage2Starts } = setup();
+			mockPi.onCall({ matchArgIncludes: `Stage one ${nonce}`, output: "stage one done" });
+			mockPi.onCall({ matchArgIncludes: `Stage two ${nonce}`, waitForPath: path.join(tempDir, `${nonce}.never`), output: "never" });
+			const firstId = await launch({ workflowScript: script, args });
+			const stage2RunId = (await stopWhenStage2Starts(firstId, runtimeReplacedAbortReason(), awaitedStage2Ready)).steps?.find((step) => step.workflowKey === "stage2")?.runId;
+			assert.ok(stage2RunId);
+			assert.equal(readStatusFile(stage2RunId).state, "running");
+
+			const relaunchId = await launch({ workflowScript: script, args });
+			const journalPath = path.join(DIRS.async, relaunchId, "workflow-children.jsonl");
+			await stopWhenStage2Starts(relaunchId, new Error("Stopped by user."), () => fs.existsSync(journalPath) && fs.readFileSync(journalPath, "utf-8").includes(`"runId":"${stage2RunId}"`));
+			const child = await waitForAsyncState(stage2RunId, (status) => terminalStates.includes(status.state ?? ""), 30_000);
+			assert.equal(child.state, "stopped");
+		});
+
+		it("ends the wait on a revived awaited child when the runtime is replaced, leaving its result for the relaunch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `revived-${Date.now()}`;
+			const release = path.join(tempDir, `${nonce}.release`);
+			mockPi.onCall({ exitCode: 1, jsonl: [{ type: "message_end", message: { role: "assistant", content: [], model: "openai-codex/gpt-5.6-luna", stopReason: "error", errorMessage: "This operation was aborted", usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } }] });
+			mockPi.onCall({ waitForPath: release, output: "revived done" });
+			const callsBefore = mockPi.callCount();
+			const { launch, stopWhenStage2Starts } = setup();
+			const runId = await launch({ workflowScript: `await runs.run("stage2", { agent: "echo", task: "Revive ${nonce}" });` });
+			const stopped = await stopWhenStage2Starts(runId, runtimeReplacedAbortReason(), (status) => mockPi.callCount() >= callsBefore + 2 && Boolean(status.steps?.find((step) => step.workflowKey === "stage2")?.async));
+			assert.equal(stopped.workflow?.stopCause, "runtime-replaced");
+			const revivedId = stopped.steps?.find((step) => step.workflowKey === "stage2")?.runId;
+			assert.ok(revivedId);
+			await new Promise((resolve) => setTimeout(resolve, 700));
+			fs.writeFileSync(release, "go");
+			await waitForAsyncState(revivedId, (status) => status.state === "complete", 30_000);
+			await new Promise((resolve) => setTimeout(resolve, 1_200));
+			assert.equal(fs.existsSync(path.join(DIRS.async, revivedId, "workflow-result.json")), true, "the stopped run must not import the revived child's result");
+		});
+
+		it("lets exactly one of two concurrent relaunches import a finished child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+			const nonce = `claim-${Date.now()}`;
+			const script = `const work = await runs.run("work", { agent: "echo", task: "Seeded ${nonce}" }); return { output: work.output, reused: work.reused === true };`;
+			const args = { nonce };
+			const sessionId = "session-123";
+			const priorDir = path.join(DIRS.async, `prior-${nonce}`);
+			const childDir = path.join(DIRS.async, `child-${nonce}`);
+			const priorStatus = { runId: path.basename(priorDir), mode: "workflow", sessionId, state: "stopped", startedAt: 1, endedAt: Date.now(), steps: [], workflow: { trace: [], emits: [], console: [], args, argsDigest: stableJsonDigest(args), scriptDigest: createHash("sha256").update(script).digest("hex"), stopCause: "runtime-replaced" } } satisfies AsyncStatus;
+			fs.mkdirSync(priorDir, { recursive: true });
+			fs.writeFileSync(path.join(priorDir, "status.json"), JSON.stringify(priorStatus));
+			appendWorkflowChildJournal(priorDir, { type: "start", key: "work", fingerprint: workflowChildFingerprint({ agent: "echo", task: `Seeded ${nonce}` }), runId: path.basename(childDir) });
+			updateTerminalRunIndex(priorDir, priorStatus);
+			fs.mkdirSync(childDir, { recursive: true });
+			fs.writeFileSync(path.join(childDir, "status.json"), JSON.stringify({ runId: path.basename(childDir), mode: "single", sessionId, parentWorkflowRunId: priorStatus.runId, state: "complete", startedAt: 1, steps: [{ agent: "echo", status: "complete" }] }));
+			writeAsyncResultFile(path.join(childDir, "workflow-result.json"), { id: path.basename(childDir), runId: path.basename(childDir), sessionId, toolCallId: "seeded-call", asyncDir: childDir, state: "complete", success: true, results: [{ agent: "echo", output: "seeded output", success: true }] });
+			mockPi.onCall({ matchArgIncludes: `Seeded ${nonce}`, output: "fresh output" });
+			const callsBefore = mockPi.callCount();
+			const { launch, settled } = setup();
+			const relaunched = await Promise.all([launch({ workflowScript: script, args }), launch({ workflowScript: script, args })].map(async (id) => await settled(await id)));
+			assert.deepEqual(relaunched.map((status) => status.workflow?.value).sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))), [
+				{ output: "fresh output", reused: false },
+				{ output: "seeded output", reused: true },
+			]);
+			assert.equal(mockPi.callCount(), callsBefore + 1);
+		});
 	});
 
 	it("delivers a terminal Darwin workflow failure after demand disappears", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1687,7 +2291,9 @@ Answer only from the supplied synthetic text.
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 		assert.equal(workflowResult.state, "complete");
-		assert.match(workflowResult.results?.[0]?.output ?? "", /Async: external/);
+		assert.equal(workflowResult.results?.[0]?.state, "running");
+		assert.equal(workflowResult.results?.[0]?.output, "");
+		assert.equal(workflowResult.results?.[0]?.success, undefined);
 		assert.equal(await waitForFileContent(markerPath, "started"), "started");
 		assert.equal(mockPi.callCount(), 0);
 
@@ -1751,7 +2357,8 @@ Answer only from the supplied synthetic text.
 		}
 		assert.equal(runResult.state, "complete");
 
-		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+		// Let parent-side completion publication finish while retrying cleanup.
+		await fs.promises.rm(result.details.asyncDir!, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 		fs.rmSync(resultPath, { force: true });
 	});
 
@@ -1797,83 +2404,9 @@ Answer only from the supplied synthetic text.
 		}
 		assert.equal(runResult.state, "complete");
 
-		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+		// Let parent-side completion publication finish while retrying cleanup.
+		await fs.promises.rm(result.details.asyncDir!, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
 		fs.rmSync(resultPath, { force: true });
-	});
-
-	it("runs external CLI agents with fallback models without registry validation", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const markerPath = path.join(tempDir, "external-fallback-started");
-		const executor = makeExecutor([
-			makeAgent("external", {
-				runner: { type: "external-cli", command: process.execPath, args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "started")`] },
-				fallbackModels: ["mock/fallback"],
-			}),
-		]);
-		const result = await executor.execute(
-			"external-fallback-model",
-			{ agent: "external", task: "Run external", async: true },
-			new AbortController().signal,
-			undefined,
-			{
-				...makeMinimalCtx(tempDir),
-				modelRegistry: { getAvailable: () => [{ provider: "other", id: "known" }] },
-			},
-		);
-
-		assert.equal(result.isError, undefined);
-		assert.doesNotMatch(result.content[0]?.text ?? "", /Unknown subagent model/);
-		assert.equal(await waitForFileContent(markerPath, "started"), "started");
-		assert.equal(mockPi.callCount(), 0);
-
-		assert.ok(result.details.asyncId);
-		const resultPath = path.join(DIRS.results, `${result.details.asyncId}.json`);
-		let runResult: { state?: string } = {};
-		for (let attempt = 0; attempt < 100; attempt++) {
-			if (fs.existsSync(resultPath)) runResult = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
-			if (runResult.state === "complete" || runResult.state === "failed") break;
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-		assert.equal(runResult.state, "complete");
-
-		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-		fs.rmSync(resultPath, { force: true });
-	});
-
-	it("rejects external CLI fork context before fallback model validation", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const markerPath = path.join(tempDir, "external-fork-started");
-		const parentSessionFile = path.join(mockPi.dir, "external-fork-parent.jsonl");
-		fs.writeFileSync(parentSessionFile, `${JSON.stringify({ type: "session", version: 3, id: "parent", cwd: tempDir })}\n`, "utf-8");
-		const ctx = makeMinimalCtx(tempDir);
-		Object.assign(ctx.sessionManager, {
-			getSessionFile: () => parentSessionFile,
-			getLeafId: () => "parent-leaf",
-			openSession: () => ({
-				createBranchedSession: () => parentSessionFile,
-			}),
-		});
-		const executor = makeExecutor([
-			makeAgent("external", {
-				runner: { type: "external-cli", command: process.execPath, args: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(markerPath)}, "started")`] },
-				defaultContext: "fork",
-				fallbackModels: ["mock/fallback"],
-			}),
-		]);
-		const result = await executor.execute(
-			"external-fork-fallback",
-			{ agent: "external", task: "Run external", async: true },
-			new AbortController().signal,
-			undefined,
-			{
-				...ctx,
-				modelRegistry: { getAvailable: () => [{ provider: "other", id: "known" }] },
-			},
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /does not support: fork context/);
-		assert.doesNotMatch(result.content[0]?.text ?? "", /Unknown subagent model/);
-		assert.equal(mockPi.callCount(), 0);
-		assert.equal(fs.existsSync(markerPath), false);
 	});
 
 	it("rejects explicit model overrides for external CLI agents", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -2051,24 +2584,15 @@ Answer only from the supplied synthetic text.
 		const { asyncId: workflowRunId, asyncDir } = result.details;
 		assert.ok(workflowRunId);
 		assert.ok(asyncDir);
-		const statusPath = path.join(asyncDir, "status.json");
 		const eventsPath = path.join(asyncDir, "events.jsonl");
 		const resultPath = path.join(DIRS.results, `${workflowRunId}.json`);
-		let liveStatus: AsyncStatus | undefined;
-		const activityDeadline = Date.now() + 5_000;
-		while (Date.now() < activityDeadline) {
-			if (fs.existsSync(statusPath)) {
-				const candidate = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatus;
-				if (candidate.activityState === "needs_attention" && !candidate.steps?.[0]?.currentTool
-					&& controlPayloads.some((payload) => payload.event?.type === "needs_attention")) {
-					liveStatus = candidate;
-					break;
-				}
-			}
-			await new Promise((resolve) => setTimeout(resolve, 50));
-		}
+		const liveStatus = await waitForAsyncState(
+			workflowRunId,
+			(candidate) => candidate.activityState === "needs_attention" && !candidate.steps?.[0]?.currentTool
+				&& controlPayloads.some((payload) => payload.event?.type === "needs_attention"),
+			60_000,
+		) as AsyncStatus;
 
-		assert.ok(liveStatus, "expected workflow status to expose idle child attention");
 		assert.equal(liveStatus.activityState, "needs_attention");
 		assert.equal(liveStatus.steps?.[0]?.activityState, "needs_attention");
 		assert.equal(liveStatus.steps?.[0]?.workflowKey, "stalled-review");
@@ -2102,11 +2626,7 @@ Answer only from the supplied synthetic text.
 
 		assert.equal(fs.existsSync(resultPath), false, "child must remain live until attention is observed");
 		fs.writeFileSync(releasePath, "release");
-		const completionDeadline = Date.now() + 5_000;
-		while (!fs.existsSync(resultPath)) {
-			if (Date.now() > completionDeadline) assert.fail("Timed out waiting for async workflow completion");
-			await new Promise((resolve) => setTimeout(resolve, 50));
-		}
+		await waitForAsyncResultFile(workflowRunId, 60_000);
 		fs.rmSync(asyncDir, { recursive: true, force: true });
 		fs.rmSync(resultPath, { force: true });
 	});
@@ -2183,9 +2703,131 @@ Answer only from the supplied synthetic text.
 		assert.equal(child?.output, "default async child done");
 		assert.ok(child?.runId);
 		assert.equal(result.details.results[0]?.finalOutput, "default async child done");
-		assert.equal(fs.existsSync(path.join(DIRS.async, child.runId)), true);
-		fs.rmSync(path.join(DIRS.async, child.runId), { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
+		const childDir = path.join(DIRS.async, child.runId);
+		assert.equal(fs.existsSync(childDir), true);
+		assert.equal(fs.existsSync(path.join(childDir, "workflow-result.json")), false);
+		for (const localResultDir of ["result-pending", "result-index"]) {
+			const localPath = path.join(childDir, localResultDir);
+			const jsonFiles = fs.existsSync(localPath)
+				? fs.readdirSync(localPath, { recursive: true }).filter((entry) => String(entry).endsWith(".json"))
+				: [];
+			assert.deepEqual(jsonFiles, [], `${localResultDir} retained result metadata: ${jsonFiles.join(", ")}`);
+		}
+		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 		fs.rmSync(path.join(DIRS.results, `${child.runId}.json`), { force: true });
+	});
+
+	it("retains workflow publication recovery files when the executor await is already aborted", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const runId = `abort-await-${Date.now()}`;
+		const sessionId = "abort-session";
+		const toolCallId = "abort-call";
+		const childDir = path.join(DIRS.async, runId);
+		const resultPath = path.join(childDir, "workflow-result.json");
+		fs.mkdirSync(childDir, { recursive: true });
+		fs.writeFileSync(path.join(childDir, "mission.json"), "{}", "utf-8");
+		const payload = { id: runId, runId, sessionId, toolCallId, asyncDir: childDir, state: "complete", success: true, results: [{ agent: "echo", output: "recoverable publication—not imported", success: true }] };
+		assert.deepEqual(writeAsyncResultFile(resultPath, payload), { state: "public" });
+		writePendingAsyncResultFile(resultPath, payload);
+		const encodedRun = encodeIndexSegment(runId);
+		const seededPaths = [
+			resultPath,
+			path.join(childDir, "result-pending", encodeIndexSegment(sessionId), `${encodedRun}.json`),
+			path.join(childDir, "result-index", "sessions", encodeIndexSegment(sessionId), `${encodedRun}.json`),
+			path.join(childDir, "result-index", "runs", `${encodedRun}.json`),
+			path.join(childDir, "result-index", "tool-calls", encodeIndexSegment(toolCallId), `${encodedRun}.json`),
+			path.join(childDir, "result-index", "observers", "mission", `${encodedRun}.json`),
+		];
+		for (const file of seededPaths) assert.equal(fs.statSync(file).isFile(), true, file);
+		const before = seededPaths.map((file) => fs.readFileSync(file));
+		const piEvents = createEventBus();
+		let unsubscribe = () => {};
+		const terminal = new Promise<void>((resolve, reject) => {
+			const timer = setTimeout(() => reject(new Error(`runner ${runId} did not terminate`)), 5_000);
+			unsubscribe = piEvents.on(SUBAGENT_PROCESS_TERMINAL_EVENT, (value) => {
+				if ((value as { runId?: string }).runId !== runId) return;
+				clearTimeout(timer);
+				resolve();
+			});
+		});
+		mockPi.onCall({ output: "runner output" });
+		const controller = new AbortController();
+		controller.abort();
+		try {
+			const result = await makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, piEvents).execute(
+				"abort-workflow-await",
+				{ agent: "echo", task: "Do not import the seeded result", async: true, workflowAwaitAsync: true, workflowChildAsyncId: runId },
+				controller.signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+			assert.equal(result.isError, true);
+			assert.equal(result.details.runId, runId);
+			assert.equal(result.details.asyncDir, childDir);
+			assert.equal(result.details.results.length, 1);
+			assert.equal(result.details.results[0]?.exitCode, 1);
+			assert.equal(result.details.results[0]?.stopped, true);
+			assert.equal(result.details.results[0]?.timedOut, undefined);
+			assert.equal(result.details.results[0]?.error, "Workflow stopped before async child completed.");
+			assert.equal(result.details.results[0]?.finalOutput, "Workflow stopped before async child completed.");
+			assert.doesNotMatch(result.content[0]?.text ?? "", /recoverable publication—not imported/);
+			seededPaths.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index], file));
+			await terminal;
+		} finally {
+			unsubscribe();
+			fs.rmSync(childDir, { recursive: true, force: true });
+			fs.rmSync(path.join(DIRS.results, `${runId}.json`), { force: true });
+			removeResultIndex(DIRS.results, sessionId, runId, toolCallId);
+		}
+	});
+
+	it("preserves imported workflow delivery when payload cleanup fails", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async (t) => {
+		const runId = `cleanup-failure-${Date.now()}`;
+		const sessionId = "cleanup-session";
+		const toolCallId = "cleanup-call";
+		const childDir = path.join(DIRS.async, runId);
+		const resultPath = path.join(childDir, "workflow-result.json");
+		fs.mkdirSync(childDir, { recursive: true });
+		fs.writeFileSync(path.join(childDir, "mission.json"), "{}", "utf-8");
+		const payload = { id: runId, runId, sessionId, toolCallId, asyncDir: childDir, state: "complete", success: true, results: [{ agent: "echo", output: "imported despite cleanup failure", success: true, usage: { input: 3, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 1 } }] };
+		writeAsyncResultFile(resultPath, payload);
+		writePendingAsyncResultFile(resultPath, payload);
+		const originalRmSync = fsDefault.rmSync;
+		let attempted = false;
+		t.mock.method(fsDefault, "rmSync", ((target: fs.PathLike, options?: fs.RmDirOptions) => {
+			if (path.resolve(String(target)) === path.resolve(resultPath)) {
+				attempted = true;
+				const error = new Error("denied") as NodeJS.ErrnoException;
+				error.code = "EACCES";
+				throw error;
+			}
+			return originalRmSync(target, options);
+		}) as typeof fsDefault.rmSync);
+		syncBuiltinESMExports();
+		mockPi.onCall({ output: "runner output" });
+		try {
+			const result = await makeExecutor([makeAgent("echo")]).execute(
+				"cleanup-failure-await",
+				{ agent: "echo", task: "Import seeded result", async: true, workflowAwaitAsync: true, workflowChildAsyncId: runId },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+			assert.equal(attempted, true);
+			assert.equal(result.isError, undefined, result.content[0]?.text);
+			assert.equal(result.details.results[0]?.finalOutput, "imported despite cleanup failure");
+			assert.equal(result.details.results[0]?.exitCode, 0);
+			assert.deepEqual(result.details.results[0]?.usage, payload.results[0].usage);
+			assert.equal(fs.existsSync(resultPath), true);
+			for (const localResultDir of ["result-pending", "result-index"]) {
+				const localPath = path.join(childDir, localResultDir);
+				assert.deepEqual(fs.existsSync(localPath) ? fs.readdirSync(localPath, { recursive: true }).filter((entry) => String(entry).endsWith(".json")) : [], []);
+			}
+		} finally {
+			t.mock.restoreAll();
+			syncBuiltinESMExports();
+			fs.rmSync(childDir, { recursive: true, force: true });
+			fs.rmSync(path.join(DIRS.results, `${runId}.json`), { force: true });
+		}
 	});
 
 	it("keeps ordinary async workflow child results in the watcher-owned path", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -2202,10 +2844,7 @@ Answer only from the supplied synthetic text.
 		assert.ok(childRunId);
 		const childDir = path.join(DIRS.async, childRunId);
 		const childResultPath = path.join(DIRS.results, `${childRunId}.json`);
-		for (let attempt = 0; attempt < 200 && !fs.existsSync(childResultPath); attempt++) {
-			await new Promise((resolve) => setTimeout(resolve, 20));
-		}
-		assert.equal(fs.existsSync(childResultPath), true);
+		await waitForAsyncResultFile(childRunId, 60_000);
 		assert.equal(fs.existsSync(path.join(childDir, "workflow-result.json")), false);
 		fs.rmSync(childDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
 		fs.rmSync(childResultPath, { force: true });
@@ -2664,7 +3303,7 @@ Answer only from the supplied synthetic text.
 		execFileSync("git", ["add", "base.txt"], { cwd: tempDir });
 		execFileSync("git", ["commit", "-m", "base"], { cwd: tempDir, stdio: "ignore" });
 		mockPi.onCall({ output: "isolated feature", writeFiles: [{ path: "feature.txt", content: "feature\n" }] });
-		const executor = makeExecutor([makeAgent("worker", { completionGuard: false })]);
+		const executor = makeExecutor([makeAgent("worker")]);
 
 		const result = await executor.execute(
 			"direct-worktree",
@@ -2738,28 +3377,6 @@ Answer only from the supplied synthetic text.
 		const sessionHeader = JSON.parse(fs.readFileSync(childSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
 		assert.ok(sessionHeader.cwd);
 		assert.equal(path.basename(sessionHeader.cwd), path.basename(callCwd));
-	});
-
-	it("rejects workflowScript implementation children under a read-only capability ceiling before spawn", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "completed without edits" });
-		const executor = makeExecutor([makeAgent("worker")]);
-
-		const result = await executor.execute(
-			"workflow-readonly-implementation-contract",
-			{
-				async: false,
-				workflowScript: `return await runs.run("impl", { agent: "worker", task: "Implement the requested source fix" });`,
-				capabilityCeiling: { version: 1, allowedTools: ["read", "grep", "find", "ls", "contact_supervisor"], denyExtensions: true, sources: ["test"] },
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /no mutation-capable tools/);
-		assert.doesNotMatch(result.content[0]?.text ?? "", /completed without making edits/);
-		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("stringifies workflow child results without object placeholders", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3255,7 +3872,7 @@ Answer only from the supplied synthetic text.
 		const usefulReport = "# Review findings\n\nThe implementation loses the final report.";
 		const sharedOutput = path.join(tempDir, "review.md");
 		mockPi.onCall({ stdoutRaw: `${JSON.stringify(events.assistantMessage(usefulReport))}\n` });
-		const executor = makeExecutor([makeAgent("reviewer", { tools: ["read"], completionGuard: false })]);
+		const executor = makeExecutor([makeAgent("reviewer", { tools: ["read"] })]);
 
 		const result = await executor.execute(
 			"scripted-workflow-file-only-acceptance-collision",
@@ -3298,8 +3915,8 @@ Answer only from the supplied synthetic text.
 		});
 		mockPi.onCall({ output: "Read-only review completed.", matchArgIncludes: "Review the persisted implementation report without editing it" });
 		const executor = makeExecutor([
-			makeAgent("worker", { tools: ["read", "write"], completionGuard: false }),
-			makeAgent("reviewer", { tools: ["read"], completionGuard: false }),
+			makeAgent("worker", { tools: ["read", "write"] }),
+			makeAgent("reviewer", { tools: ["read"] }),
 		]);
 
 		const result = await executor.execute(
@@ -3360,13 +3977,14 @@ Answer only from the supplied synthetic text.
 		assert.match(result.content[0]?.text ?? "", new RegExp(`Workflow '${workflowId}' validation failed before child launch; no children launched`));
 		assert.match(result.content[0]?.text ?? "", /Parallel plus sequential rewrite/);
 		assert.deepEqual(result.details.results, []);
+		assert.equal(result.details.workflow?.failureKind, "validation");
 	});
 
 	it("replaces stale workflow output when a child claims its path but writes no report", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const sharedOutput = path.join(tempDir, "failed-review.md");
 		fs.writeFileSync(sharedOutput, "stale workflow output", "utf-8");
 		mockPi.onCall({ exitCode: 1, stderr: "review child failed before writing output" });
-		const executor = makeExecutor([makeAgent("reviewer", { completionGuard: false })]);
+		const executor = makeExecutor([makeAgent("reviewer")]);
 
 		const result = await executor.execute(
 			"scripted-workflow-missing-child-output-collision",
@@ -3489,12 +4107,12 @@ Answer only from the supplied synthetic text.
 		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state !== "started").map(({ state }) => state).sort(), ["completed", "failed"]);
 	});
 
-	it("reports keyed runs.all result access after siblings settle", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects keyed runs.all result access before launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
 		mockPi.onCall({ output: "second child completed", matchArgIncludes: "Second task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"scripted-workflow-runs-all-keyed-result-access",
 			{
 				async: false,
@@ -3512,10 +4130,42 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
-		assert.equal(mockPi.callCount(), 2);
-		assert.match(result.content[0]?.text ?? "", /runs\.all resolves to an ordered array, not a key map/);
-		assert.match(result.content[0]?.text ?? "", /Use results\[0\], array destructuring, or results\.map/);
-		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state === "completed").map(({ key }) => key).sort(), ["first", "second"]);
+		assert.equal(mockPi.callCount(), 0);
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { ok?: boolean; errors?: Array<{ message?: string }> };
+		assert.equal(payload.ok, false);
+		assert.match(payload.errors?.[0]?.message ?? "", /runs\.all returns an ordered array/);
+		assert.match(payload.errors?.[0]?.message ?? "", /'children\.first' is keyed access/);
+		assert.equal(result.details.workflow, undefined);
+	});
+
+	it("allows keyed access on a nested binding that shadows a runs.all result", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
+		const executor = makeExecutor([makeAgent("echo")]);
+
+		const result = await executor.executePublic(
+			"scripted-workflow-runs-all-shadowed-result-access",
+			{
+				async: false,
+				workflowScript: `
+					const children = await runs.all([
+						{ key: "first", agent: "echo", task: "First task" }
+					]);
+					let local;
+					{
+						const children = { first: { output: "shadowed" } };
+						local = children.first.output;
+					}
+					return { local, child: children[0].output };
+				`,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.equal(mockPi.callCount(), 1);
+		assert.deepEqual(result.details.workflow?.value, { local: "shadowed", child: "first child completed" });
 	});
 
 	it("keeps array access working when runs.all child keys collide with array properties", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3523,7 +4173,7 @@ Answer only from the supplied synthetic text.
 		mockPi.onCall({ output: "map child completed", matchArgIncludes: "Map task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"scripted-workflow-runs-all-colliding-key-access",
 			{
 				async: false,
@@ -3592,6 +4242,97 @@ Answer only from the supplied synthetic text.
 		assert.deepEqual(result.details.workflow?.value, ["first child completed", "second child completed"]);
 	});
 
+	it("cuts an oversized foreground workflow return, keeps the call trace, and saves the full result", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "scan done" });
+		const result = await makeExecutor([makeAgent("echo")]).execute(
+			"scripted-workflow-large-return",
+			{ async: false, workflowScript: `await runs.run("scan", { agent: "echo", task: "Scan" }); return "x".repeat(210000);` },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const text = result.content[0]?.text ?? "";
+		assert.equal(result.isError, undefined, text);
+		assert.ok(Buffer.byteLength(text, "utf-8") < 210_000);
+		assert.match(text.slice(-500), /Call trace:\n- run scan: started\n- run scan: completed/);
+		const savedPath = /\[TRUNCATED: .* - full output at (.+)\]/.exec(text)?.[1];
+		assert.ok(savedPath, text.slice(0, 500));
+		assert.ok(!savedPath.includes(`${path.sep}outputs${path.sep}`), `full result must not share the child outputs tree: ${savedPath}`);
+		assert.ok(fs.readFileSync(savedPath, "utf-8").includes(`Return:\n${"x".repeat(210000)}`));
+		// Age-based artifact retention must remove the saved full result like other run artifacts.
+		const old = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+		fs.utimesSync(savedPath, old, old);
+		fs.rmSync(path.join(TEMP_ARTIFACTS_DIR, ".last-cleanup"), { force: true });
+		cleanupOldArtifacts(TEMP_ARTIFACTS_DIR, 1);
+		assert.equal(fs.existsSync(savedPath), false);
+	});
+
+	it("marks cut async workflow return previews and points to the full value", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const result = await executor.execute("scripted-workflow-large-async-return", { async: true, workflowScript: `return "y".repeat(2000);` }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const workflowRunId = result.details.asyncId!;
+		const statusPath = path.join(result.details.asyncDir!, "status.json");
+		let status: { state?: string } = {};
+		for (let attempt = 0; attempt < 300; attempt++) {
+			status = JSON.parse(fs.readFileSync(statusPath, "utf-8"));
+			if (status.state === "complete" || status.state === "failed") break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(status.state, "complete");
+		const resultPath = path.join(DIRS.results, `${workflowRunId}.json`);
+		const summary = (JSON.parse(fs.readFileSync(resultPath, "utf-8")) as { summary?: string }).summary ?? "";
+		assert.ok(summary.includes(`Return: ${"y".repeat(1000)}… (truncated; full return value and emits: ${statusPath} (workflow.value, workflow.emits))`), summary);
+		const statusText = (await executor.execute("status-large-return", { action: "status", id: workflowRunId }, new AbortController().signal, undefined, makeMinimalCtx(tempDir))).content[0]?.text ?? "";
+		assert.match(statusText, /Return: "y{239}…/);
+		assert.ok(statusText.includes(`Full return value and emits: ${statusPath} (workflow.value, workflow.emits)`), statusText);
+		fs.rmSync(result.details.asyncDir!, { recursive: true, force: true });
+		fs.rmSync(resultPath, { force: true });
+	});
+
+	it("bounds a large child error in the workflow call trace", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ exitCode: 1, stderr: "c".repeat(300000) });
+		const result = await makeExecutor([makeAgent("echo")]).execute(
+			"scripted-workflow-large-child-error",
+			{ async: false, workflowScript: `try { await runs.run("scan", { agent: "echo", task: "Scan" }); } catch {} return "done";` },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		const text = result.content[0]?.text ?? "";
+		assert.ok(Buffer.byteLength(text, "utf-8") < 50_000, `${Buffer.byteLength(text, "utf-8")} bytes`);
+		assert.match(text, /- run scan: failed [\s\S]*c… \(\+\d+ chars\)/);
+		const savedPath = /\[TRUNCATED: trace errors shortened - full output at (.+)\]/.exec(text)?.[1];
+		assert.ok(savedPath && fs.readFileSync(savedPath, "utf-8").includes("c".repeat(300000)), text.slice(-400));
+	});
+
+	it("caps an oversized thrown workflow error in foreground text and async summaries", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const workflowScript = `throw new Error("e".repeat(300000));`;
+		const foreground = await executor.execute("scripted-workflow-large-error", { async: false, workflowScript }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const text = foreground.content[0]?.text ?? "";
+		assert.equal(foreground.isError, true);
+		assert.ok(Buffer.byteLength(text, "utf-8") < 300_000);
+		const savedPath = /\[TRUNCATED: .* - full output at (.+)\]/.exec(text)?.[1];
+		assert.ok(savedPath && fs.readFileSync(savedPath, "utf-8").includes("e".repeat(300000)), text.slice(0, 500));
+
+		const started = await executor.execute("scripted-workflow-large-async-error", { async: true, workflowScript }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const statusPath = path.join(started.details.asyncDir!, "status.json");
+		let status: { state?: string; error?: string } = {};
+		for (let attempt = 0; attempt < 300; attempt++) {
+			status = JSON.parse(fs.readFileSync(statusPath, "utf-8"));
+			if (status.state === "failed") break;
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+		assert.equal(status.state, "failed");
+		assert.ok(status.error?.includes("e".repeat(300000)));
+		const resultPath = path.join(DIRS.results, `${started.details.asyncId}.json`);
+		const summary = (JSON.parse(fs.readFileSync(resultPath, "utf-8")) as { summary?: string }).summary ?? "";
+		assert.ok(summary.length < 2_000 && summary.includes(`… (truncated; full error: ${statusPath} (error))`), summary.slice(0, 300));
+		fs.rmSync(started.details.asyncDir!, { recursive: true, force: true });
+		fs.rmSync(resultPath, { force: true });
+	});
+
 	it("rejects an over-limit runs.all batch before launching any workflow child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const executor = makeExecutor([makeAgent("echo")], { maxSubagentSpawnsPerRun: 1 });
 
@@ -3614,6 +4355,27 @@ Answer only from the supplied synthetic text.
 		assert.match(result.content[0]?.text ?? "", /validation failed before child launch; no children launched/);
 		assert.match(result.content[0]?.text ?? "", /'first', 'second'.*minimum required: 2; configured: 1/);
 		assert.equal(result.details.workflow, undefined);
+	});
+
+	it("rejects an unknown literal agent before launching any workflow child", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("reviewer")]);
+		const workflowScript = `const scan = await runs.run("scan", { agent: "reviewer", task: "Scan" });\nreturn runs.run("review", { agent: "reviwer", task: scan.output });`;
+
+		const result = await executor.execute("scripted-workflow-unknown-agent", { async: false, workflowScript }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(result.isError, true);
+		assert.equal(mockPi.callCount(), 0);
+		assert.match(result.content[0]?.text ?? "", /no children launched\. runs\.run: Unknown agent 'reviwer'\. Did you mean 'reviewer'\?/);
+
+		const validation = await executor.execute("scripted-workflow-unknown-agent-validate", { action: "validate", workflowScript }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.equal(validation.isError, true);
+		assert.deepEqual(JSON.parse(validation.content[0]?.text ?? "").errors.map((error: { kind?: string; line?: number }) => ({ kind: error.kind, line: error.line })), [{ kind: "agent", line: 2 }]);
+	});
+
+	it("checks literal agents with the parent model's provider-specific discovery", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), (_cwd, provider) => provider === "openai-codex" ? [makeAgent("reviewer")] : []);
+		const ctx = { ...makeMinimalCtx(tempDir), model: { provider: "openai-codex", id: "gpt-test" } };
+		const validation = await executor.execute("provider-agent-validate", { action: "validate", workflowScript: `return runs.run("review", { agent: "reviewer", task: "Review" });` }, new AbortController().signal, undefined, ctx as ReturnType<typeof makeMinimalCtx>);
+		assert.equal(validation.isError, undefined, validation.content[0]?.text);
 	});
 
 	it("lets an explicit workflow spawn override exceed config", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3669,6 +4431,116 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.readFileSync(markerPath, "utf-8"), "verified");
 		assert.equal(result.details.results[0]?.acceptance?.status, "verified");
 		assert.equal(result.details.results[0]?.acceptance?.verifyRuns[0]?.id, "gate");
+	});
+
+	it("bridges a typed gate's json stdout into the child's structuredOutput", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete. See report." });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const gate = {
+			command: `${process.execPath} -e "process.stdout.write(JSON.stringify({ verdict: 'blocked', action: 'writer-fix' }))"`,
+			output: "json",
+			schema: { type: "object", properties: { verdict: { type: "string", enum: ["ok", "blocked"] } }, required: ["verdict"] },
+		};
+
+		const result = await executor.execute(
+			"typed-gate",
+			{ async: false, agent: "echo", task: "Review the report without edits", gate },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "typed gate failed");
+		const child = result.details.results[0];
+		assert.equal(child?.acceptance?.status, "verified");
+		assert.equal(child?.acceptance?.verifyRuns[0]?.status, "passed");
+		assert.deepEqual(child?.structuredOutput, { verdict: "blocked", action: "writer-fix" });
+	});
+
+	it("fails the run when a typed gate prints something other than schema-valid json", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete." });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const result = await executor.execute(
+			"typed-gate-invalid",
+			{ async: false, agent: "echo", task: "Review the report without edits", gate: { command: `${process.execPath} -e "process.stdout.write('WRITER-FIX report=r.md')"`, output: "json" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /verification 'gate' failed: output: "json" stdout is not valid JSON/);
+		assert.equal(result.details.results[0]?.structuredOutput, undefined);
+	});
+
+	it("rejects a typed gate combined with outputSchema before launch, in both spellings", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const shorthand = await executor.execute(
+			"typed-gate-conflict",
+			{ async: false, agent: "echo", task: "Review", gate: { command: "true", output: "json" }, outputSchema: { type: "object" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(shorthand.isError, true);
+		assert.match(shorthand.content[0]?.text ?? "", /gate\.output: .*cannot be combined with outputSchema/);
+
+		const explicit = await executor.execute(
+			"typed-verify-conflict",
+			{ async: false, agent: "echo", task: "Review", acceptance: { level: "verified", verify: [{ id: "v", command: "true", output: "json" }] }, outputSchema: { type: "object" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(explicit.isError, true);
+		assert.match(explicit.content[0]?.text ?? "", /acceptance\.verify: .*cannot be combined with outputSchema/);
+
+		const declared = makeExecutor([makeAgent("typed", { outputSchema: { type: "object" } })]);
+		const frontmatter = await declared.execute(
+			"typed-gate-agent-schema",
+			{ async: false, agent: "typed", task: "Review", gate: { command: "true", output: "json" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(frontmatter.isError, true);
+		assert.match(frontmatter.content[0]?.text ?? "", /gate\.output: .*cannot be combined with agent 'typed' outputSchema/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("preserves an explicitly bound staged index through a foreground launch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const cwd = fs.mkdtempSync(path.join(tempDir, "preserved-index-"));
+		execFileSync("git", ["init", "-q"], { cwd });
+		fs.writeFileSync(path.join(cwd, "owned.txt"), "parent staged\n", "utf-8");
+		execFileSync("git", ["add", "owned.txt"], { cwd });
+		const before = execFileSync("git", ["write-tree"], { cwd, encoding: "utf-8" }).trim();
+		mockPi.onCall({ output: [
+			"review complete",
+			"```acceptance-report",
+			JSON.stringify({
+				criteriaSatisfied: [{ id: "criterion-1", status: "satisfied", evidence: "implemented" }],
+				changedFiles: [],
+				testsAddedOrUpdated: [],
+				commandsRun: [{ command: "npm test", result: "passed", summary: "passed" }],
+				validationOutput: ["tests passed"],
+				residualRisks: [],
+				noStagedFiles: false,
+			}),
+			"```",
+		].join("\n") });
+		const executor = makeExecutor([makeAgent("worker")]);
+
+		const result = await executor.execute(
+			"preserved-index",
+			{ async: false, agent: "worker", task: "Review the fix without edits", cwd, acceptance: { level: "checked", preserveStagedIndex: true } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(cwd),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "preserved index run failed");
+		assert.equal(result.details.results[0]?.acceptance?.status, "checked");
+		assert.equal(execFileSync("git", ["write-tree"], { cwd, encoding: "utf-8" }).trim(), before);
 	});
 
 	it("lets runs.all siblings settle when one verified gate fails", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

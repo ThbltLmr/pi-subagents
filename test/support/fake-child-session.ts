@@ -23,6 +23,8 @@ export interface FakeChildResponse {
 	waitForPath?: string;
 	keepAliveAfterFinalMessageMs?: number;
 	jsonl?: unknown[];
+	/** Leaves terminal lifecycle events to the scripted JSONL, for ordering-sensitive tests. */
+	omitImplicitFinalEvents?: boolean;
 	/** Raw JSON lines; parsed into events for the in-process child without acceptance-report injection. */
 	stdoutRaw?: string;
 	steps?: Array<{ delay?: number; waitForPath?: string; jsonl?: unknown[]; stdoutRaw?: string }>;
@@ -46,6 +48,8 @@ export interface FakeChildResponse {
 	queuedMessageTurnStartDelayMs?: number;
 	/** Assistant text emitted for that delayed queued-message turn. */
 	queuedMessageOutput?: string;
+	/** Accept input before any assistant/terminal event; consume it only after this path exists. */
+	queuedInputReleasePath?: string;
 	/** Keep post-final queued input pending until abort; do not emit user `message_end` or continue. */
 	holdQueuedMessagesUntilAbort?: boolean;
 }
@@ -360,6 +364,18 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 					}
 				}
 				emit({ type: "agent_start" });
+				if (response.queuedInputReleasePath) {
+					boundaryOpen = true;
+					const keepAlive = setInterval(() => {}, 1_000);
+					try {
+						await waitForQueuedMessage();
+						await waitForReleasePath(response.queuedInputReleasePath);
+						await drainQueuedBoundary(response, task);
+					} finally {
+						clearInterval(keepAlive);
+					}
+					return;
+				}
 				if (Array.isArray(response.steps) && response.steps.length > 0) {
 					for (const step of response.steps) {
 						if (typeof step?.delay === "number" && step.delay > 0) await sleep(step.delay, abortedPromise);
@@ -384,8 +400,10 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 					emit({ type: "tool_execution_end", toolName: "structured_output" });
 				}
 				if (record.aborted) return;
-				emit({ type: "agent_end", messages: [...messages], willRetry: false });
-				emit({ type: "agent_settled" });
+				if (!response.omitImplicitFinalEvents) {
+					emit({ type: "agent_end", messages: [...messages], willRetry: false });
+					emit({ type: "agent_settled" });
+				}
 				boundaryOpen = true;
 				markScriptedFinal();
 				if (response.holdQueuedMessagesUntilAbort) {
@@ -449,6 +467,7 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 							storage: launch.storage,
 							model: launch.model,
 							tools: launch.tools,
+							builtinMcpTools: launch.builtinMcpTools,
 							excludeTools: launch.excludeTools,
 							extensionPaths: launch.extensionPaths,
 							ambientExtensions: launch.ambientExtensions,
@@ -456,6 +475,7 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 							noSkills: launch.noSkills,
 							noContextFiles: launch.noContextFiles,
 							processEnv: launch.processEnv,
+							projectTrusted: launch.projectTrusted,
 						},
 						runtime: { ...launch.runtime, structuredOutput: launch.runtime.structuredOutput ? { schema: launch.runtime.structuredOutput.schema, acceptanceReport: launch.runtime.structuredOutput.acceptanceReport } : undefined },
 					}), "utf-8");

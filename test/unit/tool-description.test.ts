@@ -49,9 +49,10 @@ describe("registered subagent tool description", () => {
 				assert.equal(tool.description, "Run subagents.");
 				assert.equal(tool.hasSnippet, false);
 				assert.equal(tool.hasGuidelines, false);
-				for (const name of ["agent", "task", "action", "workflowScript", "async", "worktree"]) {
+				for (const name of ["agent", "label", "task", "action", "workflow", "async", "worktree"]) {
 					assert.ok(tool.properties.includes(name), `${name} remains available`);
 				}
+				assert.equal(tool.properties.includes("workflowScript"), false);
 			} finally {
 				fs.rmSync(agentDir, { recursive: true, force: true });
 			}

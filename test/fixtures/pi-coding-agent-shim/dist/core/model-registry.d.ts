@@ -1,11 +1,12 @@
-import type { Api, AuthResult, Model, ModelsRefreshOptions, ModelsRefreshResult, Provider } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, AssistantMessageEventStream, AuthResult, Context, Model, ModelsApiStreamOptions, ModelsRefreshOptions, ModelsRefreshResult, ModelsSimpleStreamOptions, Provider, ProviderHeaders } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 export type { ProviderConfigInput } from "./provider-composer.ts";
 export type ResolvedRequestAuth = {
     ok: true;
     apiKey?: string;
-    headers?: Record<string, string>;
+    headers?: ProviderHeaders;
+    baseUrl?: string;
     env?: Record<string, string>;
 } | {
     ok: false;
@@ -29,6 +30,11 @@ export declare class ModelRegistry {
     getApiKeyAndHeaders(model: Model<Api>): Promise<ResolvedRequestAuth>;
     getProviderAuthStatus(provider: string): AuthStatus;
     getProvider(provider: string): Provider | undefined;
+    /** Stream through the configured provider with request-time authentication. */
+    stream<TApi extends Api>(model: Model<TApi>, context: Context, options?: ModelsApiStreamOptions<TApi>): AssistantMessageEventStream;
+    /** Stream with provider-neutral options and request-time authentication. */
+    streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream;
+    complete<TApi extends Api>(model: Model<TApi>, context: Context, options?: ModelsApiStreamOptions<TApi>): Promise<AssistantMessage>;
     getProviderDisplayName(provider: string): string;
     getProviderAuth(provider: string): Promise<AuthResult | undefined>;
     getApiKeyForProvider(provider: string): Promise<string | undefined>;

@@ -18,6 +18,14 @@ const config = resolveControlConfig(undefined, {
 });
 
 describe("subagent control attention state", () => {
+	it("notifies once for each distinct long-open tool call even when notice text matches", () => {
+		const seen = new Set<string>();
+		const event = buildControlEvent({ to: "needs_attention", runId: "run", agent: "worker", reason: "tool_open_threshold", currentTool: "bash", toolCallId: "first" });
+		assert.equal(claimControlNotification(resolveControlConfig(), event, seen), true);
+		assert.equal(claimControlNotification(resolveControlConfig(), { ...event, ts: event.ts + 1000 }, seen), false);
+		assert.equal(claimControlNotification(resolveControlConfig(), { ...event, toolCallId: "second" }, seen), true);
+	});
+
 	it("marks a run as needing attention only after the idle threshold", () => {
 		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, now: 50 }), undefined);
 		assert.equal(deriveActivityState({ config, startedAt: 0, lastActivityAt: 0, turnCount: 1, now: 400 }), "needs_attention");
@@ -57,22 +65,10 @@ describe("subagent control attention state", () => {
 			to: "needs_attention",
 			runId: "run-1",
 			agent: "worker",
-			message: "worker completed without making edits for an implementation task",
+			message: "worker needs attention",
 		});
 
-		assert.equal(event.message, "worker completed without making edits for an implementation task");
-	});
-
-	it("builds terminal completion guard control events", () => {
-		const event = buildControlEvent({
-			to: "needs_attention",
-			runId: "run-1",
-			agent: "worker",
-			message: "worker completed without making edits for an implementation task",
-			reason: "completion_guard",
-		});
-
-		assert.equal(event.reason, "completion_guard");
+		assert.equal(event.message, "worker needs attention");
 	});
 
 	it("defaults notifications to active-long-running and needs attention", () => {
@@ -291,26 +287,6 @@ describe("subagent control attention state", () => {
 		assert.doesNotMatch(message, /Subagent needs attention/);
 	});
 
-	it("formats terminal completion guard notices without live-run commands", () => {
-		const event = buildControlEvent({
-			to: "needs_attention",
-			runId: "78f659a3",
-			agent: "worker",
-			index: 0,
-			message: "worker completed without making edits for an implementation task",
-			reason: "completion_guard",
-		});
-
-		const message = formatControlNoticeMessage(event, "subagent-worker-78f659a3-1");
-
-		assert.match(message, /Subagent failed: worker/);
-		assert.match(message, /read the output artifact or session/);
-		assert.match(message, /Run intercom target \(may be inactive\): subagent-worker-78f659a3-1/);
-		assert.doesNotMatch(message, /Status:/);
-		assert.doesNotMatch(message, /Interrupt:/);
-		assert.doesNotMatch(message, /What are you blocked on/);
-	});
-
 	it("formats intercom notifications with the same control commands", () => {
 		const event = buildControlEvent({ to: "needs_attention", runId: "78f659a3", agent: "worker" });
 
@@ -334,8 +310,8 @@ describe("subagent control attention state", () => {
 			runId: "run-1",
 			agent: "worker",
 			index: 0,
-			message: "worker completed without making edits for an implementation task",
-			reason: "completion_guard",
+			message: "worker needs attention",
+			reason: "tool_failures",
 		});
 		assert.equal(claimControlNotification(resolveControlConfig(), terminalEvent, seen, "subagent-worker-run-1-1"), true);
 	});

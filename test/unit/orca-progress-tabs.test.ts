@@ -53,6 +53,22 @@ async function waitForFile(file: string, timeoutMs = 5_000): Promise<void> {
 	}
 }
 
+async function waitForCreationSettled(creationSettled: Promise<void>, timeoutMs = 5_000): Promise<void> {
+	// The watchdog is intentionally unref'd so it cannot keep the owning process alive.
+	// Keep the test host alive while explicitly observing its settlement contract.
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		await Promise.race([
+			creationSettled,
+			new Promise<void>((_, reject) => {
+				timer = setTimeout(() => reject(new Error("Timed out waiting for Orca terminal creation to settle.")), timeoutMs);
+			}),
+		]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
 function progressFile(prefix: string, suffix: ".log" | ".done"): string {
 	const root = path.join(TEMP_ROOT_DIR, "orca-progress");
 	const name = fs.readdirSync(root).find((candidate) => candidate.startsWith(prefix) && candidate.endsWith(suffix));
@@ -183,7 +199,8 @@ test("malformed optional observer metadata cannot break child execution", { skip
 	assert.ok(tab);
 	await tab.finish("completed");
 	// Capture precedes the watchdog's final manifest/queue writes; wait for its close.
-	await tab.creationSettled;
+	await waitForFile(capture);
+	await waitForCreationSettled(tab.creationSettled);
 	const args = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
 	assert.equal(args[args.indexOf("--title") + 1], "subagents · subagent · 1");
 	const manifestDir = path.join(dir, ".pi", "subagents", "views", "orca");
@@ -245,7 +262,7 @@ test("creationSettled publishes the final manifest after capture and finish", { 
 		assert.equal(JSON.parse(fs.readFileSync(manifestPath, "utf-8")).state, "opening");
 	} finally {
 		fs.writeFileSync(release, "");
-		await tab.creationSettled;
+		await waitForCreationSettled(tab.creationSettled);
 		await tab.finish("completed");
 	}
 	assert.equal(settled, true);
@@ -279,7 +296,7 @@ test("enabled tabs use a worktree sequence and successful Pi sessions get cleanu
 	assert.equal(resolvePiSessionId(path.join(dir, `missing_${sessionId}.jsonl`)), undefined);
 	await tab.finish("completed", sessionFile);
 	// Capture precedes the watchdog's final manifest/queue writes; wait for its close.
-	await tab.creationSettled;
+	await waitForCreationSettled(tab.creationSettled);
 	const args = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
 	assert.deepEqual(args.slice(0, 2), ["terminal", "create"]);
 	assert.equal(args[args.indexOf("--worktree") + 1], `path:${path.resolve(dir)}`);
@@ -321,7 +338,7 @@ test("enabled tabs use a worktree sequence and successful Pi sessions get cleanu
 	});
 	assert.ok(secondTab);
 	await secondTab.finish("failed", sessionFile);
-	await secondTab.creationSettled;
+	await waitForCreationSettled(secondTab.creationSettled);
 	const secondArgs = JSON.parse(fs.readFileSync(secondCapture, "utf-8")) as string[];
 	assert.equal(secondArgs[secondArgs.indexOf("--title") + 1], "subagents · worker · 2");
 	const secondLog = fs.readdirSync(progressDir).find((name) => name.startsWith(`${runId}-second-0-`) && name.endsWith(".log"));
@@ -355,11 +372,36 @@ test("viewer strips split terminal control sequences across poll ticks", { skip:
 	await new Promise((resolve) => setTimeout(resolve, 200));
 	tab.append("31mred OSC \u001b]0;secret");
 	await new Promise((resolve) => setTimeout(resolve, 200));
-	tab.append(" title\u0007visible\u0000\u0001\r\t\u007f\n");
+	tab.append(" title\u0007visible OSC-ST \u001b]0;hidden\u001b\\after-osc DCS-ST \u001bPpayload\u001b\\after-dcs\u0000\u0001\r\t\u007f\n");
 	tab.finish("failed");
 	const output = await outputPromise;
-	assert.match(output, /safe CSI red OSC visible\n/);
-	assert.doesNotMatch(output, /\u001b|31m|secret|title|\u0000|\u0001|\r|\t|\u007f/);
+	assert.match(output, /safe CSI red OSC visible OSC-ST after-osc DCS-ST after-dcs\n/);
+	assert.doesNotMatch(output, /\u001b|31m|secret|title|hidden|payload|\u0000|\u0001|\r|\t|\u007f/);
+});
+
+test("viewer one-liner survives shells that collapse backslashes inside single quotes", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
+	const dir = tempDir();
+	const capture = path.join(dir, "capture.json");
+	const fakeOrca = writeCaptureOrca(dir);
+	const tab = createOrcaProgressTab({
+		cwd: dir,
+		runId: "progress-fish-quoting",
+		agent: "worker",
+		index: 0,
+		config: { enabled: true },
+		command: fakeOrca,
+		env: { ...process.env, ORCA_TEST_CAPTURE: capture },
+	});
+	assert.ok(tab);
+	await waitForFile(capture);
+	const args = JSON.parse(fs.readFileSync(capture, "utf-8")) as string[];
+	const viewer = args[args.indexOf("--command") + 1]!;
+	// Orca runs --command through the user's login shell. fish collapses `\\`
+	// inside single quotes to `\`, so a backslash in the viewer one-liner reaches
+	// `node -e` as different source (unterminated string literal) and every progress
+	// tab opens on a SyntaxError instead of the mirror.
+	assert.equal(viewer.includes("\\"), false);
+	await tab.finish("failed");
 });
 
 test("mirror output keeps small writes that hit stream backpressure before the byte limit", { skip: process.platform === "win32" ? "Orca progress tabs are not supported on Windows" : undefined }, async () => {
@@ -421,7 +463,7 @@ test("same-worktree Orca creates wait for the previous numbered tab", { skip: pr
 	assert.ok(first);
 	assert.ok(second);
 	await waitForFile(secondCapture);
-	await Promise.all([first.creationSettled, second.creationSettled]);
+	await Promise.all([waitForCreationSettled(first.creationSettled), waitForCreationSettled(second.creationSettled)]);
 	const titles = fs.readFileSync(order, "utf-8").trim().split("\n");
 	assert.deepEqual(titles, ["subagents · worker · 1", "subagents · reviewer · 2"]);
 	first.finish("failed");
@@ -559,7 +601,7 @@ test("create stdout preserves pretty-printed JSON in the observer manifest", { s
 	const runId = `progress-pretty-json-${Date.now()}`;
 	const tab = createOrcaProgressTab({ cwd: dir, runId, agent: "worker", index: 0, config: { enabled: true }, command: fakeOrca });
 	assert.ok(tab);
-	await tab.creationSettled;
+	await waitForCreationSettled(tab.creationSettled);
 	const manifestDir = path.join(dir, ".pi", "subagents", "views", "orca");
 	const manifestName = fs.readdirSync(manifestDir).find((name) => name.startsWith(`${runId}-0-`) && name.endsWith(".json"));
 	assert.ok(manifestName);

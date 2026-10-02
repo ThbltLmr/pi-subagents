@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
+import childProcess from "node:child_process";
 import * as fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { readAsyncRecoveryDescriptor } from "../../src/runs/background/async-resume.ts";
+import { executeAsyncSingle } from "../../src/runs/background/async-execution.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
+import { DIRS } from "../../src/shared/types.ts";
+import { makeAgent } from "../support/helpers.ts";
+import { registerRequiredChildExtensions } from "../../src/api/required-child-extensions.ts";
 
 const budgetDirectories: string[] = [];
 
@@ -36,6 +42,57 @@ describe("async recovery descriptor", () => {
 				assert.throws(() => readAsyncRecoveryDescriptor(root), /label must be/);
 			}
 		} finally { fs.rmSync(root, { recursive: true, force: true }); }
+	});
+
+	it("rejects a mandatory-policy launch on an external runner before spawning the runner", (t) => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-required-all-"));
+		const runId = `required-all-${Date.now().toString(36)}`;
+		const asyncDir = path.join(DIRS.async, runId);
+		const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("captured detached spawn"); });
+		syncBuiltinESMExports();
+		const registration = registerRequiredChildExtensions({ sessionId: "required-all-runners", extensions: [{ id: "host-policy", path: import.meta.filename }], requireForAllRunners: true });
+		try {
+			const result = executeAsyncSingle(runId, {
+				agent: "external", task: "Review", agentConfig: makeAgent("external", { runner: { type: "external-cli", command: process.execPath, args: ["fake.mjs"] } }),
+				ctx: { pi: { events: { emit() {} } }, cwd: root, currentSessionId: "required-all-runners" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false, sessionRoot: path.join(root, "sessions"), maxSubagentDepth: 1,
+			});
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", /requires child extensions \(host-policy\) for every runner/u);
+			assert.equal(spawn.mock.callCount(), 0);
+			assert.equal(fs.existsSync(asyncDir), false);
+		} finally {
+			registration.dispose();
+			t.mock.restoreAll();
+			syncBuiltinESMExports();
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		}
+	});
+
+	it("snapshots an explicit empty descendant allowlist before detached spawn", (t) => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-recovery-allowed-agents-"));
+		const runId = `recovery-allowed-agents-${Date.now().toString(36)}`;
+		const asyncDir = path.join(DIRS.async, runId);
+		const spawn = t.mock.method(childProcess, "spawn", () => { throw new Error("captured detached spawn"); });
+		syncBuiltinESMExports();
+		try {
+			const result = executeAsyncSingle(runId, {
+				agent: "worker", task: "Coordinate", agentConfig: makeAgent("worker", { allowedAgents: [] }),
+				ctx: { pi: { events: { emit() {} } }, cwd: root, currentSessionId: "recovery-allowed-agents" },
+				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+				shareEnabled: false, sessionRoot: path.join(root, "sessions"), maxSubagentDepth: 1, acceptance: false,
+			});
+			assert.equal(result.isError, true);
+			assert.equal(spawn.mock.callCount(), 1);
+			assert.deepEqual(readAsyncRecoveryDescriptor(asyncDir)?.allowedAgents, []);
+		} finally {
+			t.mock.restoreAll();
+			syncBuiltinESMExports();
+			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(asyncDir, { recursive: true, force: true });
+		}
 	});
 
 	it("accepts launchContractDigest written by async execution", () => {
@@ -153,7 +210,6 @@ describe("async recovery descriptor", () => {
 				agent: "worker",
 				cwd: root,
 				model: "test/missing-primary",
-				fallbackModels: ["test/fallback"],
 				systemPromptMode: "replace",
 				inheritGlobalContext: false,
 				inheritProjectContext: false,

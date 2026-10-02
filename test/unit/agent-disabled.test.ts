@@ -85,7 +85,6 @@ describe("builtin agent disabling", () => {
 			},
 			{
 				model: undefined,
-				fallbackModels: undefined,
 				thinking: undefined,
 				systemPromptMode: "replace",
 				inheritProjectContext: false,

@@ -6,9 +6,7 @@ import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
 export const PI_CODING_AGENT_PACKAGE = "@earendil-works/pi-coding-agent";
 export const PI_SUBAGENT_PI_BINARY_ENV = "PI_SUBAGENT_PI_BINARY";
 
-export function findPiPackageRootFromEntry(
-	entryPoint: string,
-): string | undefined {
+export function findPiPackageRootFromEntry(entryPoint: string): string | undefined {
 	let dir = path.dirname(entryPoint);
 	while (dir !== path.dirname(dir)) {
 		const packageJsonPath = path.join(dir, "package.json");
@@ -63,7 +61,7 @@ export interface PiSpawnDeps {
 export function resolveBunPiExecutable(deps: PiSpawnDeps = {}): string | undefined {
 	const bunVersion = deps.bunVersion ?? process.versions.bun;
 	const entry = deps.argv1 ?? process.argv[1];
-	if (!bunVersion || !entry?.startsWith("/$bunfs/")) return undefined;
+	if (!bunVersion || !entry || !/^(?:\/\$bunfs\/|B:[\\/]~BUN[\\/])/.test(entry)) return undefined;
 	const env = deps.env ?? process.env;
 	return env[PI_SUBAGENT_PI_BINARY_ENV]?.trim() || (deps.execPath ?? process.execPath);
 }

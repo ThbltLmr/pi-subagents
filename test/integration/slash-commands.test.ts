@@ -214,6 +214,7 @@ function createWatchdogHarness(review?: WatchdogReviewFunction) {
 	const commands = new Map<string, RegisteredSlashCommand>();
 	const renderers = new Map<string, (message: { content: string; details?: unknown }, options: { expanded: boolean }, theme: { fg(name: string, value: string): string; bold(value: string): string }) => { render(width: number): string[] } | undefined>();
 	const sent: unknown[] = [];
+	const entries: Array<{ customType: string; data: unknown }> = [];
 	const pi = {
 		events: createEventBus(),
 		on() {},
@@ -222,11 +223,13 @@ function createWatchdogHarness(review?: WatchdogReviewFunction) {
 		registerMessageRenderer(type: string, renderer: (message: { content: string; details?: unknown }, options: { expanded: boolean }, theme: { fg(name: string, value: string): string; bold(value: string): string }) => { render(width: number): string[] } | undefined) {
 			renderers.set(type, renderer);
 		},
+		registerEntryRenderer() {},
+		appendEntry(customType: string, data: unknown) { entries.push({ customType, data }); },
 		getThinkingLevel() { return "medium" as const; },
 		sendMessage(message: unknown) { sent.push(message); },
 	};
 	const runtime = registerMainWatchdog!(pi as never, review ? { review } : undefined);
-	return { commands, renderers, runtime, sent };
+	return { commands, renderers, runtime, sent, entries };
 }
 
 async function captureSlashCommandParams(
@@ -465,23 +468,19 @@ describe("subagents watchdog slash command", { skip: !available ? "watchdog comm
 		});
 	});
 
-	it("sends deterministic concern and blocker warning messages through the renderer path", async () => {
+	it("routes explicit low and medium test findings to entries and high findings to messages", async () => {
 		await withIsolatedHome(async () => {
-			const { commands, renderers, sent } = createWatchdogHarness();
-			await commands.get("subagents-watchdog")!.handler("test concern check the concern", createCommandContext());
-			await commands.get("subagents-watchdog")!.handler("test blocker check the blocker", createCommandContext());
+			const { commands, renderers, sent, entries } = createWatchdogHarness();
+			await commands.get("subagents-watchdog")!.handler("test concern low check the concern", createCommandContext());
+			await commands.get("subagents-watchdog")!.handler("test concern medium check the medium concern", createCommandContext());
+			await commands.get("subagents-watchdog")!.handler("test blocker high check the blocker", createCommandContext());
 
-			const concern = sent[0] as { customType?: string; content?: string; display?: boolean; details?: Record<string, unknown> };
-			const blocker = sent[1] as { customType?: string; content?: string; display?: boolean; details?: Record<string, unknown> };
-			assert.equal(concern.customType, "subagent_watchdog_warning");
-			assert.equal(concern.display, true);
-			assert.equal(concern.details?.severity, "concern");
-			assert.equal(concern.details?.source, "main");
-			assert.equal(concern.details?.state, "displayed");
-			assert.match(concern.content ?? "", /source="main"/);
-			assert.match(concern.content ?? "", /<state>displayed<\/state>/);
-			assert.match(concern.content ?? "", /<recommended_action>/);
+			assert.equal(entries.length, 2);
+			assert.deepEqual(entries.map((entry) => (entry.data as any).importance), ["low", "medium"]);
+			assert.equal(sent.length, 1);
+			const blocker = sent[0] as { customType?: string; content?: string; display?: boolean; details?: Record<string, unknown> };
 			assert.equal(blocker.details?.severity, "blocker");
+			assert.equal(blocker.details?.importance, "high");
 			assert.match(blocker.content ?? "", /<blocker_guidance>/);
 
 			const renderer = renderers.get("subagent_watchdog_warning")!;
@@ -498,7 +497,7 @@ describe("subagents watchdog slash command", { skip: !available ? "watchdog comm
 					assert.equal(request.emitWarning({
 						severity: "concern",
 						category: "test-gap",
-						confidence: "high",
+						importance: "high",
 						source: "main",
 						summary: "Focused validation is missing",
 						evidence: "The reviewed turn delta says changes were made but contains no test command.",
@@ -594,7 +593,7 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 			const branch = [
 				{ type: "message", message: { role: "assistant", usage: { input: 10, output: 2, cacheRead: 30, cacheWrite: 0, cost: { total: 0.2 } } } },
 				{ type: "compaction", usage: { input: 5, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.05 } } },
-				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "workflow", runId: workflowRunId, results: [] } } },
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "workflow", runId: workflowRunId, asyncId: workflowRunId, results: [] } } },
 			];
 			try {
 				registerSlashCommands!(pi as never, createState(root));
@@ -616,6 +615,77 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 				assert.doesNotMatch(report, /No subagent child usage/);
 			} finally {
 				fs.rmSync(asyncDir, { recursive: true, force: true });
+			}
+		});
+	});
+
+	it("/subagent-cost recovers async single and chain usage from status steps and metadata", async () => {
+		await withTempProject("pi-subagent-cost-async-single-", async (root) => {
+			const singleRunId = `single-cost-${process.pid}-${Date.now()}`;
+			const chainRunId = `chain-cost-${process.pid}-${Date.now()}`;
+			const sessionFile = path.join(root, "sessions", "parent.jsonl");
+			const artifactsDir = getArtifactsDir(sessionFile, root, "session");
+			fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.mkdirSync(artifactsDir, { recursive: true });
+			const runningRunId = `running-cost-${process.pid}-${Date.now()}`;
+			const writeRun = (runId: string, agents: string[], stepStatus = "complete") => {
+				fs.mkdirSync(path.join(DIRS.async, runId), { recursive: true });
+				fs.writeFileSync(path.join(DIRS.async, runId, "status.json"), JSON.stringify({
+					runId, mode: agents.length > 1 ? "chain" : "single", state: stepStatus === "complete" ? "complete" : "running", startedAt: Date.now(), cwd: root,
+					steps: agents.map((agent) => ({ agent, status: stepStatus })),
+				}), "utf-8");
+			};
+			const writeMetadata = (runId: string, agent: string, index: number | undefined, usage: Record<string, number>) => {
+				fs.writeFileSync(getArtifactPaths(artifactsDir, runId, agent, index).metadataPath, JSON.stringify({ runId, agent, usage }), "utf-8");
+			};
+			writeRun(singleRunId, ["oracle"]);
+			writeMetadata(singleRunId, "oracle", undefined, { input: 30, output: 6, cacheRead: 0, cacheWrite: 0, cost: 0.3, turns: 2 });
+			writeRun(chainRunId, ["scout", "worker"]);
+			writeMetadata(chainRunId, "scout", 0, { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1, turns: 1 });
+			writeMetadata(chainRunId, "worker", 1, { input: 40, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0.4, turns: 3 });
+			// A still-running child has no metadata yet and is not "unavailable".
+			writeRun(runningRunId, ["reviewer"], "running");
+
+			const sent: unknown[] = [];
+			const commands = new Map<string, RegisteredSlashCommand>();
+			const pi = {
+				events: createEventBus(),
+				registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+				registerShortcut() {},
+				sendMessage(message: unknown) { sent.push(message); },
+			};
+			const branch = [
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "single", runId: singleRunId, asyncId: singleRunId, results: [] } } },
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "chain", runId: chainRunId, asyncId: chainRunId, results: [] } } },
+				{ type: "message", message: { role: "toolResult", toolName: "subagent", details: { mode: "single", runId: runningRunId, asyncId: runningRunId, results: [] } } },
+				// The chain's bg_wait completion must not be counted again from artifacts.
+				{ type: "message", message: { role: "toolResult", toolName: "bg_wait", details: { mode: "single", results: [], completions: [{ runId: chainRunId, mode: "chain", results: [
+					{ agent: "scout", usage: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0, cost: 0.1, turns: 1 } },
+					{ agent: "worker", usage: { input: 40, output: 8, cacheRead: 0, cacheWrite: 0, cost: 0.4, turns: 3 } },
+				] }] } } },
+			];
+			try {
+				registerSlashCommands!(pi as never, createState(root));
+				await commands.get("subagent-cost")!.handler("", createCommandContext({
+					cwd: root,
+					sessionManager: {
+						getBranch: () => branch,
+						getSessionFile: () => sessionFile,
+						getSessionId: () => "session-parent",
+					},
+				}));
+				const report = String((sent[0] as { content?: unknown }).content ?? "");
+				assert.match(report, /Child \d \(oracle\): ↑30 ↓6 \$0\.3000 \(2 turns\)/);
+				assert.match(report, /Child \d \(scout\): ↑10 ↓2 \$0\.1000 \(1 turn\)/);
+				assert.match(report, /Child \d \(worker\): ↑40 ↓8 \$0\.4000 \(3 turns\)/);
+				assert.equal((report.match(/Child \d+ \(/g) ?? []).length, 3);
+				assert.match(report, /Children: ↑80 ↓16 \$0\.8000 \(6 turns\)/);
+				assert.doesNotMatch(report, /Async child usage unavailable/);
+			} finally {
+				fs.rmSync(path.join(DIRS.async, singleRunId), { recursive: true, force: true });
+				fs.rmSync(path.join(DIRS.async, chainRunId), { recursive: true, force: true });
+				fs.rmSync(path.join(DIRS.async, runningRunId), { recursive: true, force: true });
 			}
 		});
 	});
@@ -651,15 +721,30 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.match(String((sent[0] as { content?: unknown }).content ?? ""), /Detached foreground run run-123/);
 	});
 
-	it("does not reserve a foreground detach shortcut by default", () => {
+	it("preserves /subagents-fleet without reserving a global shortcut by default", () => {
+		const commands = new Map<string, RegisteredSlashCommand>();
 		const shortcuts = new Map<string, unknown>();
 		registerSlashCommands!({
 			events: createEventBus(),
-			registerCommand() {},
+			registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
 			registerShortcut(key: string, spec: unknown) { shortcuts.set(key, spec); },
 			sendMessage() {},
 		}, createState(process.cwd()));
-		assert.equal(shortcuts.has("ctrl+b"), false);
+		assert.ok(commands.has("subagents-fleet"));
+		assert.equal(shortcuts.size, 0);
+	});
+
+	it("/subagents-fleet loads and opens the Fleet view on first use", async () => {
+		const commands = new Map<string, RegisteredSlashCommand>();
+		registerSlashCommands!({
+			events: createEventBus(),
+			registerCommand(name: string, spec: RegisteredSlashCommand) { commands.set(name, spec); },
+			registerShortcut() {},
+			sendMessage() {},
+		}, createState(process.cwd()));
+		let opened = 0;
+		await commands.get("subagents-fleet")!.handler("", createCommandContext({ hasUI: true, custom: async () => { opened += 1; return undefined; } }));
+		assert.equal(opened, 1);
 	});
 
 	it("/subagents-stop keeps the selector within its allocated width", async () => {

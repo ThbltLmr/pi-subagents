@@ -4,7 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, before, describe, it } from "node:test";
 import {
 	NATIVE_SUPERVISOR_TOOL_NAME,
 	createNativeSupervisorChannel,
@@ -91,6 +91,13 @@ async function waitForCondition(condition: () => boolean, description: string): 
 	}
 }
 
+before(() => {
+	// Node's lazy rimraf module captures fs methods on first use. Initialize it
+	// before scan mocks, or recursive cleanup retains the mocked readdirSync.
+	const dir = fs.mkdtempSync(path.join(os.tmpdir(), "supervisor-cleanup-"));
+	fs.rmSync(dir, { recursive: true, force: true });
+});
+
 afterEach(() => {
 	delete process.env.PI_INTERCOM_ASK_TIMEOUT_MS;
 	for (const channel of createdChannels.splice(0)) fs.rmSync(channel, { recursive: true, force: true });
@@ -150,9 +157,9 @@ describe("native supervisor channel", () => {
 				assert.equal(tick, undefined, "finished descendants stop polling on every platform");
 				assert.equal(scans, scansBeforeIdle);
 			} finally {
-				channel.dispose();
 				fsDefault.readdirSync = readdir;
 				syncBuiltinESMExports();
+				channel.dispose();
 			}
 		});
 	}
@@ -189,11 +196,17 @@ describe("native supervisor channel", () => {
 		try {
 			channel.start();
 			live = true;
-			writeRequest({ sessionId: owner, runId, reason: "progress_update" });
+			const requestId = writeRequest({ sessionId: owner, runId });
 			channel.activateTransport();
 			assert.equal(drained, 0, "demand observes completion without retiring its unpolled snapshot");
 			assert.equal(notices.length, 1);
 			assert.equal(typeof tick, "function", "demand keeps the final drain scheduled");
+			fs.writeFileSync(replyFile(runId, requestId), JSON.stringify({
+				type: "subagent.supervisor.reply",
+				requestId,
+				createdAt: Date.now(),
+				message: "Approved",
+			}), "utf-8");
 			tick!();
 			assert.equal(tick, undefined);
 			assert.equal(drained, 1);
@@ -232,6 +245,7 @@ describe("native supervisor channel", () => {
 
 		assert.deepEqual(registeredTools, []);
 		channel.start();
+		assert.equal(channel.hasPendingRequests(), true, "fresh owned reply-bearing request is a drain barrier");
 		channel.dispose();
 
 		assert.deepEqual(registeredTools.map((tool) => tool.name), [NATIVE_SUPERVISOR_TOOL_NAME]);
@@ -239,7 +253,42 @@ describe("native supervisor channel", () => {
 		assert.deepEqual(sent.map(({ message }) => message.details?.id), [matchingId]);
 		assert.deepEqual(sent[0]?.options, { triggerTurn: true });
 		assert.equal(channel.pending.has(matchingId), false, "disposed channel clears pending requests");
+		assert.equal(channel.hasPendingRequests(), false, "disposed and foreign requests are not barriers");
 		assert.equal(sent.some(({ message }) => message.details?.id === otherId), false);
+	});
+
+	it("does not inject progress updates into the parent session or wake a turn", () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const progressRunId = `run-${randomUUID()}`;
+		const progressId = writeRequest({ sessionId: currentSessionId, runId: progressRunId, reason: "progress_update" });
+		const sent: Array<{ message: { details?: { id?: string } }; options?: { triggerTurn?: boolean } }> = [];
+		const ctx = {
+			cwd: process.cwd(),
+			hasUI: false,
+			sessionManager: {
+				getSessionId: () => currentSessionId,
+				getSessionFile: () => null,
+				getEntries: () => [],
+			},
+		};
+		const pi = {
+			getAllTools: () => [],
+			registerTool: () => {},
+			sendMessage: (
+				message: { details?: { id?: string } },
+				options?: { triggerTurn?: boolean },
+			) => { sent.push({ message, options }); },
+			getSessionName: () => "shared-name",
+		};
+		const channel = createNativeSupervisorChannel(pi as never, makeState(currentSessionId, ctx), { platform: "darwin" });
+
+		channel.start();
+		channel.hasPendingRequests();
+		channel.dispose();
+
+		assert.equal(sent.length, 0);
+		assert.equal(channel.pending.has(progressId), false);
+		assert.equal(fs.existsSync(requestFile(progressRunId, progressId)), false);
 	});
 
 	it("uses polling instead of native watchers on Windows", () => {
@@ -275,6 +324,102 @@ describe("native supervisor channel", () => {
 
 		assert.equal(watchCalls, 0);
 		assert.deepEqual(sent.map((message) => message.details?.id), [requestId]);
+	});
+
+	it("keeps Windows polling alive when a supervisor directory scan returns UNKNOWN", () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const runId = `run-${randomUUID()}`;
+		const sent: Array<{ details?: { id?: string } }> = [];
+		let tick: (() => void) | undefined;
+		const ctx = {
+			cwd: process.cwd(), hasUI: false,
+			sessionManager: { getSessionId: () => currentSessionId, getSessionFile: () => null, getEntries: () => [] },
+		};
+		const state = makeState(currentSessionId, ctx);
+		state.foregroundControls.set("run-a", { runId: "run-a" } as never);
+		const channel = createNativeSupervisorChannel({
+			getAllTools: () => [], registerTool: () => {},
+			sendMessage: (message: { details?: { id?: string } }) => { sent.push(message); },
+			getSessionName: () => "shared-name",
+		} as never, state, {
+			platform: "win32",
+			timers: {
+				setInterval: ((callback: () => void) => { tick = callback; return 1; }) as never,
+				clearInterval: (() => { tick = undefined; }) as never,
+				setImmediate, clearImmediate,
+			},
+		});
+		const readdir = fsDefault.readdirSync;
+
+		try {
+			channel.start();
+			assert.equal(typeof tick, "function");
+			let injectUnknown = true;
+			fsDefault.readdirSync = ((dir: fs.PathLike, options?: unknown) => {
+				if (injectUnknown) {
+					injectUnknown = false;
+					throw Object.assign(new Error("directory disappeared"), { code: "UNKNOWN" });
+				}
+				return (readdir as (dir: fs.PathLike, options?: unknown) => unknown)(dir, options);
+			}) as typeof fsDefault.readdirSync;
+			syncBuiltinESMExports();
+
+			assert.doesNotThrow(() => tick!());
+			const requestId = writeRequest({ sessionId: currentSessionId, runId });
+			tick!();
+			assert.deepEqual(sent.map((message) => message.details?.id), [requestId]);
+		} finally {
+			fsDefault.readdirSync = readdir;
+			syncBuiltinESMExports();
+			channel.dispose();
+		}
+	});
+
+	it("stops idle Windows polling and restarts it on transport demand", () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const state = makeState(currentSessionId, { sessionManager: { getSessionId: () => currentSessionId } });
+		let tick: (() => void) | undefined;
+		const channel = createNativeSupervisorChannel({ getAllTools: () => [], registerTool: () => {}, sendMessage: () => {} } as never, state, {
+			platform: "win32",
+			timers: {
+				setInterval: ((callback: () => void) => { tick = callback; return 1; }) as never,
+				clearInterval: (() => { tick = undefined; }) as never,
+				setImmediate, clearImmediate,
+			},
+		});
+		try {
+			channel.start();
+			tick!();
+			assert.equal(tick, undefined, "an idle parent stops polling");
+			state.foregroundControls.set("run-a", { runId: "run-a" } as never);
+			channel.activateTransport();
+			assert.equal(typeof tick, "function", "demand restarts polling");
+		} finally { channel.dispose(); }
+	});
+
+	it("does not classify UNKNOWN as a missing supervisor directory off Windows", () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const ctx = { sessionManager: { getSessionId: () => currentSessionId } };
+		const channel = createNativeSupervisorChannel({
+			getAllTools: () => [], registerTool: () => {}, sendMessage: () => {},
+		} as never, makeState(currentSessionId, ctx), { platform: "linux" });
+		const readdir = fsDefault.readdirSync;
+
+		try {
+			fsDefault.readdirSync = (() => {
+				throw Object.assign(new Error("unexpected scan failure"), { code: "UNKNOWN" });
+			}) as typeof fsDefault.readdirSync;
+			syncBuiltinESMExports();
+
+			assert.throws(
+				() => channel.findPendingAsks({ runId: "run", agent: "worker", childIndex: 0 }),
+				(error: NodeJS.ErrnoException) => error.code === "UNKNOWN",
+			);
+		} finally {
+			fsDefault.readdirSync = readdir;
+			syncBuiltinESMExports();
+			channel.dispose();
+		}
 	});
 
 	it("registers idle Darwin sessions without native watchers or polling", () => {
@@ -885,9 +1030,13 @@ describe("native supervisor channel", () => {
 		const resolvedRunId = `run-${randomUUID()}`;
 		const expiredRunId = `run-${randomUUID()}`;
 		const inactiveRunId = `run-${randomUUID()}`;
+		const progressRunId = `run-${randomUUID()}`;
+		const foreignRunId = `run-${randomUUID()}`;
 		const resolvedId = writeRequest({ sessionId: currentSessionId, runId: resolvedRunId });
 		const expiredId = writeRequest({ sessionId: currentSessionId, runId: expiredRunId, expiresAt: Date.now() - 1 });
 		const inactiveId = writeRequest({ sessionId: currentSessionId, runId: inactiveRunId });
+		const progressId = writeRequest({ sessionId: currentSessionId, runId: progressRunId, reason: "progress_update" });
+		const foreignId = writeRequest({ sessionId: `foreign-${randomUUID()}`, runId: foreignRunId });
 		fs.writeFileSync(replyFile(resolvedRunId, resolvedId), JSON.stringify({
 			type: "subagent.supervisor.reply",
 			requestId: resolvedId,
@@ -921,12 +1070,43 @@ describe("native supervisor channel", () => {
 		const channel = createNativeSupervisorChannel(pi as never, state);
 
 		channel.start();
+		assert.equal(channel.hasPendingRequests(), false, "resolved, expired, and inactive requests are not barriers");
 		channel.dispose();
 
-		assert.deepEqual(sent, []);
+		assert.deepEqual(sent.map((message) => message.details?.id), []);
 		assert.equal(fs.existsSync(requestFile(resolvedRunId, resolvedId)), false);
 		assert.equal(fs.existsSync(requestFile(expiredRunId, expiredId)), false);
 		assert.equal(fs.existsSync(requestFile(inactiveRunId, inactiveId)), false);
+		assert.equal(fs.existsSync(requestFile(progressRunId, progressId)), false);
+		assert.equal(fs.existsSync(requestFile(foreignRunId, foreignId)), true);
+	});
+
+	it("lists each pending request with its question text", async () => {
+		const currentSessionId = `session-${randomUUID()}`;
+		const runId = `run-${randomUUID()}`;
+		const requestId = writeRequest({ sessionId: currentSessionId, runId, message: "Rerun each failed job separately?\nOr rerun the whole run?" });
+		const registeredTools = new Map<string, { execute: (_id: string, params: { action: string }) => Promise<{ content: Array<{ text: string }> }> }>();
+		const ctx = {
+			cwd: process.cwd(),
+			hasUI: false,
+			sessionManager: { getSessionId: () => currentSessionId, getSessionFile: () => null, getEntries: () => [] },
+		};
+		const pi = {
+			getAllTools: () => [...registeredTools.keys()].map((name) => ({ name })),
+			registerTool: (tool: { name: string; execute: (_id: string, params: { action: string }) => Promise<{ content: Array<{ text: string }> }> }) => { registeredTools.set(tool.name, tool); },
+			sendMessage: () => {},
+			getSessionName: () => "shared-name",
+		};
+		const channel = createNativeSupervisorChannel(pi as never, makeState(currentSessionId, ctx));
+		try {
+			channel.start();
+			const result = await registeredTools.get(NATIVE_SUPERVISOR_TOOL_NAME)!.execute("pending", { action: "pending" });
+			const text = result.content[0]!.text;
+			assert.match(text, new RegExp(`^- ${requestId}: `));
+			assert.match(text, /\n {2}Rerun each failed job separately\?\n {2}Or rerun the whole run\?/);
+		} finally {
+			channel.dispose();
+		}
 	});
 
 	it("refreshes pending requests before listing or replying", async () => {

@@ -30,13 +30,13 @@ Pass 1 is independent reports. Pass 2 is one cross-exam. Run Pass 3 only when `-
 
 1. Write the council brief: question, scope, non-goals, evidence targets, roster, known advisor context modes, and pass cap.
 2. Tell the user the roster, context modes, and pass cap.
-3. Launch one async `workflowScript` with `runs.all` for Pass 1. Use stable keys, `phase: "Council pass 1"`, concise labels, and `output: false` unless separate artifacts are useful. Use fresh context unless the user requests forked context or an explicitly selected custom profile requires it.
+3. Launch one async workflow script (a ```` ```js workflow ```` block plus `subagent({ workflow: true, async: true })`) with `runs.all` for Pass 1. Use stable keys, `phase: "Council pass 1"`, concise labels, and `output: false` unless separate artifacts are useful. Plain children default to fresh. Use `context: "fork"` only when requested and a usable parent session exists, or select a custom profile with the intended configured context.
 4. Return one aggregate Pass 1 receipt. On completion, tell the user completion count, agreement count, dispute count, and whether Pass 2 is needed.
 5. Synthesize the claim matrix in the parent: agreements, disputed claims, missing proof, owner decisions, and at most five material relay claims per advisor.
 6. For Pass 2, tell the user which claims are relayed and why they matter. Resume each advisor with a curated challenge packet. A resume needs a retained run id and task; it excludes `agent` and rejects `gate`. Record each new run id; Pass 3 resumes those latest ids with new stable keys.
 7. Stop at convergence, pass cap, failed fallback, or user interruption. The parent writes the final memo.
 
-If an advisor is not resumable, run the same profile fresh with its Pass 1 report and challenge packet. Label it a fresh-context fallback, not true cross-exam.
+If an advisor is not resumable, launch a fresh child with the same model and any explicitly selected profile, its Pass 1 report, and the challenge packet. Label it a fresh-context fallback, not true cross-exam.
 
 Do not set `clarify`, `worktree`, `gate`, tool budgets, or tight usage budgets on advisors. Bound work through the roster, pass cap, and report length.
 

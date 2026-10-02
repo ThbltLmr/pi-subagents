@@ -20,7 +20,7 @@ const WORKTREE_NAMING_BRANCH_MAX_BYTES = 256;
 const WORKTREE_COMMAND_OUTPUT_MAX_BYTES = 128 * 1024;
 const WORKTRUNK_COMMAND = process.platform === "win32" ? "git" : "wt";
 const WORKTRUNK_ARG_PREFIX = process.platform === "win32" ? ["wt"] : [];
-export const MACHINE_DIFF_OPTIONS = ["--no-color", "--no-ext-diff", "--no-textconv", "--default-prefix", "--line-prefix=", "--no-relative"] as const;
+export const MACHINE_DIFF_OPTIONS = ["--no-color", "--no-ext-diff", "--no-textconv", "--src-prefix=a/", "--dst-prefix=b/", "--line-prefix=", "--no-relative"] as const;
 const MACHINE_PATCH_OPTIONS = [...MACHINE_DIFF_OPTIONS, "--binary"] as const;
 const PATCH_VALIDATION_OPTIONS = ["apply", "--check", "--cached", "--reverse", "--binary", "--whitespace=nowarn"] as const;
 
@@ -180,7 +180,7 @@ export interface WorktreeSetupProgress {
 	setup: WorktreeSetup;
 	attempts: Array<{ index: number; branch: string; path?: string; validated: boolean; command?: WorktreeSetupProgress["command"]; hookCommand?: WorktreeSetupProgress["command"] }>;
 	phase: string;
-	command?: { command: string; args: string[]; pid?: number; processGroupId?: number; result?: Omit<SetupCommandResult, "stdout" | "stderr"> };
+	command?: { command: string; args: string[]; pid?: number; processGroupId?: number; result?: Omit<SetupCommandResult, "stdout" | "stdoutBuffer" | "stderr"> };
 	unknown?: string;
 	cleanup?: WorktreeCleanupReport;
 }
@@ -245,7 +245,7 @@ class SetupTransaction {
 			...options, signal: this.options.signal, deadlineAt: this.options.deadlineAt,
 			onSpawn: (process) => { Object.assign(this.progress.command!, process); this.publish(); },
 		});
-		const { stdout: _stdout, stderr: _stderr, ...metadata } = result;
+		const { stdout: _stdout, stdoutBuffer: _stdoutBuffer, stderr: _stderr, ...metadata } = result;
 		this.progress.command.result = metadata;
 		if (result.processTree?.state === "unknown") this.unknown(result.error ?? "Command tree settlement unverified");
 		this.publish();
@@ -439,9 +439,14 @@ function shortWorktreeHash(value: string): string {
 }
 
 function truncateUtf8(value: string, maxBytes: number): string {
-	if (Buffer.byteLength(value, "utf-8") <= maxBytes) return value;
-	const truncated = Buffer.from(value, "utf-8").subarray(0, maxBytes).toString("utf-8");
-	return /[\uD800-\uDFFF]$/u.test(truncated) ? truncated.slice(0, -1) : truncated;
+	const bytes = Buffer.from(value, "utf-8");
+	if (bytes.length <= maxBytes) return value;
+	// Back off to a code-point boundary before decoding: cutting mid-sequence
+	// emits U+FFFD (3 bytes per dangling byte), which can push the re-encoded
+	// result beyond maxBytes (e.g. a 256-byte cap yields a 258-byte string).
+	let end = maxBytes;
+	while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+	return bytes.subarray(0, end).toString("utf-8");
 }
 
 /** Convert an arbitrary label to a single safe filesystem/branch component. */
@@ -743,13 +748,35 @@ export function resolveExpectedWorktreeAgentCwd(cwd: string, runId: string, inde
 function linkNodeModulesIfPresent(toplevel: string, worktreePath: string): boolean {
 	const nodeModulesPath = path.join(toplevel, "node_modules");
 	const nodeModulesLinkPath = path.join(worktreePath, "node_modules");
-	if (!fs.existsSync(nodeModulesPath) || fs.existsSync(nodeModulesLinkPath)) return false;
+	const hasDirectoryEntry = (candidate: string): boolean => {
+		try { fs.lstatSync(candidate); return true; }
+		catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+			throw error;
+		}
+	};
 	try {
-		fs.symlinkSync(nodeModulesPath, nodeModulesLinkPath);
+		if (hasDirectoryEntry(nodeModulesLinkPath)) return false;
+		let sourceRealPath: string;
+		try {
+			if (!fs.statSync(nodeModulesPath).isDirectory()) throw new Error("source node_modules is not a directory");
+			sourceRealPath = fs.realpathSync.native(nodeModulesPath);
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+			throw error;
+		}
+		fs.symlinkSync(nodeModulesPath, nodeModulesLinkPath, process.platform === "win32" ? "junction" : "dir");
+		if (!fs.lstatSync(nodeModulesLinkPath).isSymbolicLink()
+			|| fs.realpathSync.native(nodeModulesLinkPath) !== sourceRealPath) {
+			throw new Error("created link does not resolve to the source node_modules");
+		}
 		return true;
-	} catch {
-		// Symlink creation is optional (e.g., unsupported filesystems on CI runners).
-		return false;
+	} catch (error) {
+		const code = error instanceof Error && "code" in error && typeof error.code === "string" ? `${error.code}: ` : "";
+		throw new Error(
+			`failed to link node_modules from ${nodeModulesPath} to ${nodeModulesLinkPath}: ${code}${error instanceof Error ? error.message : String(error)}`,
+			{ cause: error },
+		);
 	}
 }
 
@@ -1295,7 +1322,7 @@ async function compensateSetup(tx: SetupTransaction): Promise<WorktreeCleanupRep
 			deadlineAt: tx.options.deadlineAt, acceptedExitCodes,
 			onSpawn: (process) => { Object.assign(tx.progress.command!, process); tx.publish(); },
 		});
-		const { stdout: _stdout, stderr: _stderr, ...metadata } = result;
+		const { stdout: _stdout, stdoutBuffer: _stdoutBuffer, stderr: _stderr, ...metadata } = result;
 		tx.progress.command.result = metadata;
 		if (result.processTree?.state === "unknown") tx.unknown(result.error ?? "Rollback command settlement unverified");
 		tx.publish();

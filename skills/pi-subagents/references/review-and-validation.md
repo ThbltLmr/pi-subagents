@@ -2,7 +2,7 @@
 
 This reference retains upstream recipes. This fork has no bundled profiles: use plain `{ task }` children by default. Named profiles below require explicit custom configuration, and task-only children default to fresh context.
 
-Generic review and delivery guidance for delegated work. This file does not encode private backlog, merge, or release policy.
+Generic review and delivery guidance for operator-authorized delegated work. This file does not encode private backlog, merge, or release policy.
 
 ## Delivery loop
 
@@ -11,7 +11,7 @@ Use the smallest loop that proves the change:
 1. Inspect the source, diff, issue, or plan directly.
 2. Keep one writer for each cwd or worktree.
 3. Run focused validation that can fail for the changed behavior.
-4. Use fresh-context read-only review for substantial, risky, public, or hard-to-see changes.
+4. When the operator/project delegation contract calls for independent review, use a fresh-context read-only reviewer; otherwise parent inspection is valid.
 5. Apply only accepted findings inside the same writer boundary.
 6. Re-run affected validation and review only the changed blast radius.
 7. Inspect the final diff and evidence before parent acceptance.
@@ -27,7 +27,7 @@ Skip review ceremony for trivial wording, renames, or local-only probes when dir
 | Possible over-scope or needless complexity | same-writer challenge before fresh review |
 | Material design tradeoff | council mode |
 
-Reviewers are fresh-context by default. Use the ordinary `reviewer` role for routine code review. Forked oracle/advisor runs are escalation-only for parent-history, drift, root-cause, model-routing, or hard tradeoff evidence.
+Plain review children default to fresh context; put the read-only boundary and review angle in their task. Use an explicitly configured custom reviewer profile only when needed. Forked advisory runs can provide parent-history, drift, root-cause, model-routing, or hard tradeoff evidence; there are no implicit `reviewer`, `oracle`, or `advisor` profiles.
 
 ## Finding disposition
 
@@ -63,7 +63,7 @@ Before reporting delegated work as done, verify the relevant subset:
 
 - final diff contains only intended files
 - focused validation covers changed behavior
-- substantial or risky changes have fresh-review evidence
+- required independent review has fresh-review evidence
 - accepted findings are fixed and revalidated
 - publication authority exists before push, comment, close, merge, deploy, or release
 - external checks are exact-head when used as evidence

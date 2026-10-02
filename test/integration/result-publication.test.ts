@@ -16,14 +16,18 @@ function fileBarrier(file: string): Promise<void> {
 	return new Promise((resolve, reject) => {
 		// libuv on Windows compares long event paths against this watch path; expand TEMP's 8.3 aliases.
 		const watcher = fs.watch(fs.realpathSync.native(path.dirname(file)), check);
-		const deadline = setTimeout(() => { watcher.close(); reject(new Error(`Missing barrier: ${file}`)); }, 15_000);
+		let settled = false;
+		const deadline = setTimeout(() => { settled = true; watcher.close(); reject(new Error(`Missing barrier: ${file}`)); }, 15_000);
 		function check() {
-			if (!fs.existsSync(file)) return;
+			if (settled || !fs.existsSync(file)) return;
+			settled = true;
 			clearTimeout(deadline);
 			watcher.close();
 			resolve();
 		}
 		check();
+		// A same-turn write can precede Darwin's native watch subscription.
+		queueMicrotask(check);
 	});
 }
 
@@ -92,7 +96,7 @@ describe("native runner result publication", { skip: !available ? "pi packages u
 						collect: { as: "reviews" }, concurrency: 2,
 					},
 				],
-				agents: [makeAgent("producer", { completionGuard: false }), makeAgent("reviewer", { completionGuard: false })],
+				agents: [makeAgent("producer"), makeAgent("reviewer")],
 				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: sessionId, completionOwnerId: owner },
 				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 				shareEnabled: false, maxSubagentDepth: 2, acceptance: false,
@@ -305,7 +309,7 @@ describe("native runner result publication", { skip: !available ? "pi packages u
 				process.env.RESULT_PUBLICATION_TEST_ROOT = root;
 				mockPi.onCall({ output: "Indexed completion after capacity recovery" });
 				const receipt = executeAsyncSingle(id, {
-					agent: "worker", task: "Complete without a provider", agentConfig: makeAgent("worker", { completionGuard: false }),
+					agent: "worker", task: "Complete without a provider", agentConfig: makeAgent("worker"),
 					ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: sessionId, completionOwnerId: owner },
 					artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 					shareEnabled: false, sessionRoot: path.join(tempDir, "sessions"), maxSubagentDepth: 2, acceptance: false,
