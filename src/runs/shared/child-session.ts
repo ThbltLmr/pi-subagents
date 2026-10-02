@@ -321,8 +321,9 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 					try { evidence.start(); } catch (error) { return Promise.reject(error); }
 					return session.prompt(text).then(() => evidence?.settled(), (error) => { evidence?.invalidate(); throw error; });
 				},
-				steer: (text) => { evidence?.invalidate(); return session.steer(text); },
-				followUp: (text) => { evidence?.invalidate(); return session.followUp(text); },
+				// Pi 0.99+ resolves these with a queue disposition; callers only need completion.
+				steer: async (text) => { evidence?.invalidate(); await session.steer(text); },
+				followUp: async (text) => { evidence?.invalidate(); await session.followUp(text); },
 				abort: () => { evidence?.invalidate(); return session.abort(); },
 				hasQueuedMessages: () => session.agent?.hasQueuedMessages?.() === true,
 				dispose: () => {
