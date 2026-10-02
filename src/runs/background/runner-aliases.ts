@@ -17,10 +17,11 @@ import { fileURLToPath } from "node:url";
 export const JITI_ALIAS_ENV = "JITI_ALIAS";
 
 /** Specifiers the runner's import graph may use, with the package and export subpath each resolves to. */
-export const HOST_PEER_ALIASES: ReadonlyArray<{ specifier: string; pkg: string; subpath: string }> = [
+export const HOST_PEER_ALIASES: ReadonlyArray<{ specifier: string; pkg: string; subpath: string; optional?: boolean }> = [
 	{ specifier: "@earendil-works/pi-coding-agent", pkg: "@earendil-works/pi-coding-agent", subpath: "." },
 	{ specifier: "@earendil-works/pi-agent-core", pkg: "@earendil-works/pi-agent-core", subpath: "." },
-	{ specifier: "@earendil-works/pi-agent-core/node", pkg: "@earendil-works/pi-agent-core", subpath: "./node" },
+	// Optional: Pi 1.0's pi-agent-core declares no "./node" export, so nothing can import it and no alias is needed.
+	{ specifier: "@earendil-works/pi-agent-core/node", pkg: "@earendil-works/pi-agent-core", subpath: "./node", optional: true },
 	{ specifier: "@earendil-works/pi-tui", pkg: "@earendil-works/pi-tui", subpath: "." },
 	{ specifier: "@earendil-works/pi-ai", pkg: "@earendil-works/pi-ai", subpath: "./compat" },
 	{ specifier: "@earendil-works/pi-ai/compat", pkg: "@earendil-works/pi-ai", subpath: "./compat" },
@@ -145,10 +146,12 @@ export function resolveHostPeerAliases(
 	// hosts retain the required aliases, rather than hiding a broken install.
 	const stableVersion = typeof hostManifest?.version === "string" ? /^0\.(\d+)\.\d+$/.exec(hostManifest.version) : null;
 	const isPreChord = stableVersion !== null && Number(stableVersion[1]) < 85;
-	const required = [...HOST_PEER_ALIASES, ...(isPreChord ? [] : CHORD_PEER_ALIASES), ...(isPi0850 ? PI0850_PEER_ALIASES : [])];
-	for (const { specifier, pkg, subpath } of required) {
+	const required: ReadonlyArray<(typeof HOST_PEER_ALIASES)[number]> = [...HOST_PEER_ALIASES, ...(isPreChord ? [] : CHORD_PEER_ALIASES), ...(isPi0850 ? PI0850_PEER_ALIASES : [])];
+	for (const { specifier, pkg, subpath, optional } of required) {
 		const packageDir = findPeerPackageDir(piPackageRoot, pkg, hostManifest?.name);
 		let target = packageDir ? resolvePackageSubpath(packageDir, subpath) : undefined;
+		// An optional subpath the package does not declare is unreachable, so skip it; a declared but missing file still fails.
+		if (optional && packageDir && target === undefined) continue;
 		// Pi 0.85.0 omitted this runtime dependency. Never replace working host
 		// exports or extend this exact version contract to other peers/hosts.
 		if ((!target || !fs.existsSync(target))
