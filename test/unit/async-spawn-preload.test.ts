@@ -47,13 +47,21 @@ test("executeAsyncSingle preloads all peer aliases before the selected runner lo
 			throw new Error("spawn boundary captured");
 		});
 		nodeModule.syncBuiltinESMExports();
-		for (const scenario of ["stable", "pre-chord", "missing-pre-chord"]) {
+		let expectedSpawnCount = 0;
+		for (const scenario of ["stable", "pre-chord", "missing-pre-chord", "modern", "missing-modern"]) {
 			if (scenario === "pre-chord") {
 				fs.writeFileSync(path.join(host, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "0.84.3", exports: { ".": "./index.mjs" } }));
 				fs.rmSync(path.join(host, "node_modules", "@earendil-works/chord"), { recursive: true });
 				for (const specifier of ["@earendil-works/chord", "@earendil-works/chord/context"]) delete expectedAliases[specifier];
 			}
 			if (scenario === "missing-pre-chord") fs.unlinkSync(expectedAliases["@earendil-works/pi-agent-core/node"]!);
+			if (scenario === "modern") {
+				fs.writeFileSync(path.join(host, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "1.2.0", exports: { ".": "./index.mjs" } }));
+				const coreDir = path.join(host, "node_modules", "@earendil-works/pi-agent-core");
+				fs.writeFileSync(path.join(coreDir, "package.json"), JSON.stringify({ name: "@earendil-works/pi-agent-core", version: "1.2.0", exports: { ".": "./index.mjs" } }));
+				delete expectedAliases["@earendil-works/pi-agent-core/node"];
+			}
+			if (scenario === "missing-modern") fs.unlinkSync(expectedAliases["@earendil-works/pi-tui"]!);
 			const configuredExtension = scenario === "pre-chord" ? fileURLToPath(import.meta.url) : undefined;
 			const result = executeAsyncSingle(`spawn-preload-${scenario}`, {
 				agent: "worker", task: "Inspect launch wiring", agentConfig: makeAgent("worker", configuredExtension ? { extensions: [configuredExtension] } : {}),
@@ -62,13 +70,13 @@ test("executeAsyncSingle preloads all peer aliases before the selected runner lo
 				shareEnabled: false, sessionRoot: path.join(root, "sessions"), maxSubagentDepth: 1, acceptance: false,
 			});
 			assert.equal(result.isError, true);
-			if (scenario === "missing-pre-chord") {
-				assert.match(result.content[0]!.text, /@earendil-works\/pi-agent-core\/node/);
-				assert.equal(spawn.mock.callCount(), 2);
+			if (scenario.startsWith("missing-")) {
+				assert.match(result.content[0]!.text, scenario === "missing-modern" ? /@earendil-works\/pi-tui/ : /@earendil-works\/pi-agent-core\/node/);
+				assert.equal(spawn.mock.callCount(), expectedSpawnCount);
 				continue;
 			}
 			assert.match(result.content[0]!.text, /spawn boundary captured/);
-			assert.equal(spawn.mock.callCount(), scenario === "stable" ? 1 : 2);
+			assert.equal(spawn.mock.callCount(), ++expectedSpawnCount);
 			const [command, args, options] = spawn.mock.calls.at(-1)!.arguments;
 			assert.ok(path.isAbsolute(command));
 			assert.equal(options.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV], host);
